@@ -3,7 +3,22 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mantis-tool-tests.XXXXXX")
-trap 'rm -rf "$TEST_TMP"' EXIT HUP INT TERM
+MANIFEST_REMOVE="$ROOT/manifests/remove-user0.txt"
+ORIGINAL_REMOVE=
+
+restore_manifest() {
+  if [ -n "$ORIGINAL_REMOVE" ]; then
+    cp "$ORIGINAL_REMOVE" "$MANIFEST_REMOVE"
+    ORIGINAL_REMOVE=
+  fi
+}
+
+cleanup() {
+  restore_manifest
+  rm -rf "$TEST_TMP"
+}
+
+trap cleanup EXIT HUP INT TERM
 export FAKE_ADB_LOG="$TEST_TMP/adb.log"
 unset FAKE_MANUFACTURER FAKE_MODEL FAKE_DEVICE FAKE_BUILD_ID FAKE_INCREMENTAL
 unset FAKE_RELEASE FAKE_SDK FAKE_ABI FAKE_UNAME FAKE_ENFORCE FAKE_UID
@@ -53,6 +68,28 @@ unset FAKE_INCREMENTAL
 FAKE_MODEL=$(printf 'AFTMM\r') run_tool audit
 [ "$STATUS" -eq 0 ] || fail 'audit rejected a trailing CR'
 assert_contains "$OUT" 'SUPPORTED_MUTATION_TARGET=YES'
+
+ORIGINAL_REMOVE="$TEST_TMP/remove-user0.txt"
+cp "$MANIFEST_REMOVE" "$ORIGINAL_REMOVE"
+printf '%s\n' 'com.amazon.bueller.music ' > "$MANIFEST_REMOVE"
+
+if FAKE_MODEL=AFTKA run_tool --yes apply; then
+  fail 'accepted AFTKA with an invalid manifest'
+fi
+assert_contains "$ERR" 'model expected=AFTMM actual=AFTKA'
+case "$ERR" in
+  *'invalid package token'*) fail 'validated manifests before rejecting the target' ;;
+esac
+unset FAKE_MODEL
+
+if run_tool --yes apply; then
+  fail 'apply accepted an invalid manifest'
+fi
+assert_contains "$ERR" 'invalid package token'
+case "$OUT" in
+  *'No mutation is implemented.'*) fail 'apply reached its action after manifest rejection' ;;
+esac
+restore_manifest
 
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 

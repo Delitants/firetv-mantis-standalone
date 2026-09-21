@@ -170,6 +170,7 @@ case "$COMMAND" in
   apply)
     [ "$YES" = yes ] || { printf '%s\n' '--yes is required for apply' >&2; exit 64; }
     require_target
+    validate_manifests
     printf '%s\n' 'No mutation is implemented.'
     ;;
   *)
