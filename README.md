@@ -22,4 +22,6 @@ The package operation is `pm disable-user --user 0`; recovery is
 `pm enable --user 0`. Apps remain installed in the system image. The
 controller will not apply unless `pm help` proves both exact command forms,
 and it verifies every transition with the enabled (`-e`) and disabled (`-d`)
-package inventories.
+package inventories. Restore attempts and verified results are durably journaled
+before the successful-disable ledger is changed, so an interrupted inverse can
+be reconciled without blindly repeating `pm enable`.

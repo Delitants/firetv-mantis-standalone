@@ -33,6 +33,7 @@ unset FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT FAKE_ADBD_PID FAKE_INI
 unset FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_PACKAGE_STATE FAKE_DISABLE_MODE FAKE_DISABLE_FAIL_PACKAGE
 unset FAKE_AFTER_DISABLE_ADB_ENABLED FAKE_DISABLE_RESULT FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT
 unset FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT FAKE_ENABLE_FAIL_PACKAGE
+unset FAKE_ENABLE_INTERRUPT_MARKER FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE FAKE_AFTER_ENABLE_BLUETOOTH_ON
 unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
@@ -137,12 +138,12 @@ run_tool_interrupted() {
   done
   [ -e "$FAKE_INTERRUPT_MARKER" ] || fail 'fake ADB did not reach the interruption point'
   kill -TERM "$TOOL_PID"
+  rm -f "$FAKE_INTERRUPT_MARKER"
   if wait "$TOOL_PID"; then
     STATUS=0
   else
     STATUS=$?
   fi
-  rm -f "$FAKE_INTERRUPT_MARKER"
   OUT=$(cat "$TEST_TMP/out")
   ERR=$(cat "$TEST_TMP/err")
   return "$STATUS"
@@ -197,6 +198,7 @@ prepare_package_state() {
   printf '%s\n' 'active com.amazon.android.marketplace' 'active com.amazon.bueller.music' >> "$FAKE_PACKAGE_STATE"
   unset FAKE_DISABLE_MODE FAKE_DISABLE_FAIL_PACKAGE FAKE_AFTER_DISABLE_ADB_ENABLED FAKE_DISABLE_RESULT
   unset FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT FAKE_ENABLE_FAIL_PACKAGE
+  unset FAKE_ENABLE_INTERRUPT_MARKER FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE FAKE_AFTER_ENABLE_BLUETOOTH_ON
   unset FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT
   unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP
   unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
@@ -269,6 +271,7 @@ assert_file "$AUDIT_DIR/packages-enabled.txt"
 assert_file "$AUDIT_DIR/packages-disabled.txt"
 assert_file "$AUDIT_DIR/protected-apps.txt"
 assert_file "$AUDIT_DIR/restore-user0.sh"
+assert_file "$AUDIT_DIR/restore-journal.txt"
 assert_file "$AUDIT_DIR/SHA256SUMS"
 sh -n "$AUDIT_DIR/restore-user0.sh" || fail 'generated restore script is invalid shell'
 verify_checksums "$AUDIT_DIR" || fail 'audit checksum verification failed'
@@ -290,6 +293,16 @@ assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.sett
 assert_contains "$(cat "$AUDIT_DIR/home-resolver.txt")" 'com.amazon.tv.launcher/.HomeActivity'
 assert_contains "$(cat "$AUDIT_DIR/bluetooth.txt")" 'bluetooth_on=1'
 assert_contains "$(cat "$AUDIT_DIR/tun0.txt")" 'tun0:'
+BASELINE_CONTENT=$(cat "$AUDIT_DIR/verification-baseline.txt")
+assert_contains "$BASELINE_CONTENT" 'bluetooth_on=1'
+assert_contains "$BASELINE_CONTENT" 'adb_enabled=1'
+assert_contains "$BASELINE_CONTENT" 'development_settings_enabled=null'
+assert_contains "$BASELINE_CONTENT" 'persist.sys.usb.config=mtp,adb'
+assert_contains "$BASELINE_CONTENT" 'sys.usb.config=mtp,adb'
+assert_contains "$BASELINE_CONTENT" 'service.adb.tcp.port=5555'
+assert_contains "$BASELINE_CONTENT" 'init.svc.adbd=running'
+assert_contains "$BASELINE_CONTENT" 'always_on_vpn_app=com.wireguard.android'
+assert_contains "$BASELINE_CONTENT" 'tun0=present'
 
 # Break caught: bypassing the production atomic-rename helper on normal publication.
 HELPER_AUDIT_DIR="$TEST_TMP/audit-helper"
@@ -386,13 +399,17 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
   run_tool --output "$PM_AUDIT_DIR" audit || fail "pm capability audit failed: $ERR"
 assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
 assert_contains "$OUT" 'PACKAGE_RESTORE=pm enable --user 0'
-FAKE_PACKAGE_STATE="$TEST_TMP/generated-restore-state"
-export FAKE_PACKAGE_STATE
-printf '%s\n' 'disabled com.amazon.android.marketplace' 'disabled com.amazon.bueller.music' > "$FAKE_PACKAGE_STATE"
+prepare_package_state
+set_wolf_ready
+awk '
+  $1 == "active" && ($2 == "com.amazon.android.marketplace" || $2 == "com.amazon.bueller.music") { print "disabled", $2; next }
+  { print }
+' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
 printf '%s\n' com.amazon.android.marketplace com.amazon.bueller.music > "$PM_AUDIT_DIR/disabled-successfully.txt"
 refresh_checksums "$PM_AUDIT_DIR"
 : > "$FAKE_ADB_LOG"
-SERIAL=test-serial ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err" ||
+SERIAL=test-host:5555 ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err" ||
   fail "generated pm restore failed: $(cat "$TEST_TMP/restore-err")"
 RESTORE_LOG=$(cat "$FAKE_ADB_LOG")
 assert_contains "$RESTORE_LOG" 'shell pm enable --user 0 com.amazon.bueller.music'
@@ -400,13 +417,12 @@ assert_contains "$RESTORE_LOG" 'shell pm enable --user 0 com.amazon.android.mark
 case "$RESTORE_LOG" in
   *com.example.removed*) fail 'restore used the package inventory instead of the successful-disable journal' ;;
 esac
-# Break caught: the generated recovery script must not enable an already-enabled
-# package merely because an old checksummed ledger still names it.
+# Break caught: the generated recovery wrapper must be safely resumable after
+# its shared controller has already emptied the restore ledger.
 : > "$FAKE_ADB_LOG"
-if SERIAL=test-serial ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err"; then
-  fail 'generated restore accepted packages that were no longer disabled'
-fi
-assert_contains "$(cat "$TEST_TMP/restore-err")" 'restore precondition failed'
+SERIAL=test-host:5555 ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err" ||
+  fail "generated restore wrapper was not idempotent after completion: $(cat "$TEST_TMP/restore-err")"
+assert_contains "$(cat "$TEST_TMP/restore-out")" 'RESTORE=PASS'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0'
 
 # Break caught: recomputing checksums must not expand the generated script's
@@ -414,16 +430,16 @@ assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0'
 printf '%s\n' com.example.untrusted > "$PM_AUDIT_DIR/disabled-successfully.txt"
 refresh_checksums "$PM_AUDIT_DIR"
 : > "$FAKE_ADB_LOG"
-if SERIAL=test-serial ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err"; then
+if SERIAL=test-host:5555 ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err"; then
   fail 'generated restore accepted a non-manifest package'
 fi
 assert_contains "$(cat "$TEST_TMP/restore-err")" 'invalid recorded package'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0'
 : > "$FAKE_ADB_LOG"
-if FAKE_RELEASE=7.1.3 SERIAL=test-serial ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err"; then
+if FAKE_RELEASE=7.1.3 SERIAL=test-host:5555 ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err"; then
   fail 'restore accepted a different Android release'
 fi
-assert_contains "$(cat "$TEST_TMP/restore-err")" 'ro.build.version.release expected=7.1.2 actual=7.1.3'
+assert_contains "$(cat "$TEST_TMP/restore-err")" 'release expected=7.1.2 actual=7.1.3'
 case "$(cat "$FAKE_ADB_LOG")" in
   *'pm enable'*) fail 'restore attempted enable on a mismatched target' ;;
 esac
@@ -563,6 +579,78 @@ assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.an
 assert_file "$PACKAGE_INTERRUPT_DIR/reconciliation-journal.txt"
 assert_contains "$(cat "$PACKAGE_INTERRUPT_DIR/reconciliation-journal.txt")" 'reconciled com.amazon.android.marketplace'
 verify_checksums "$PACKAGE_INTERRUPT_DIR" || fail 'interruption reconciliation left stale checksums'
+
+# Break caught: interruption after pm enable changes state but before the
+# successful-disable ledger is pruned must be resumable without a second enable.
+PACKAGE_ENABLE_INTERRUPT_DIR="$TEST_TMP/restore-interrupted-enable"
+prepare_package_state
+set_wolf_ready
+run_tool --output "$PACKAGE_ENABLE_INTERRUPT_DIR" --yes apply || fail "apply failed for interrupted-enable test: $ERR"
+ENABLE_INTERRUPT_MARKER="$TEST_TMP/interrupt-after-enable"
+FAKE_INTERRUPT_MARKER="$ENABLE_INTERRUPT_MARKER" \
+FAKE_ENABLE_INTERRUPT_MARKER="$ENABLE_INTERRUPT_MARKER" \
+  run_tool_interrupted restore "$PACKAGE_ENABLE_INTERRUPT_DIR" || true
+assert_contains "$(cat "$PACKAGE_ENABLE_INTERRUPT_DIR/restore-journal.txt")" 'attempt com.amazon.bueller.music'
+assert_not_contains "$(cat "$PACKAGE_ENABLE_INTERRUPT_DIR/restore-journal.txt")" 'success com.amazon.bueller.music'
+assert_contains "$(cat "$PACKAGE_ENABLE_INTERRUPT_DIR/disabled-successfully.txt")" 'com.amazon.bueller.music'
+verify_checksums "$PACKAGE_ENABLE_INTERRUPT_DIR" || fail 'interrupted enable left stale backup checksums'
+unset FAKE_INTERRUPT_MARKER FAKE_ENABLE_INTERRUPT_MARKER
+run_tool restore "$PACKAGE_ENABLE_INTERRUPT_DIR" || fail "restore did not reconcile interrupted enable: $ERR"
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.bueller.music'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
+assert_contains "$(cat "$PACKAGE_ENABLE_INTERRUPT_DIR/restore-journal.txt")" 'reconciled-enabled com.amazon.bueller.music'
+[ ! -s "$PACKAGE_ENABLE_INTERRUPT_DIR/disabled-successfully.txt" ] || fail 'interrupted-enable recovery did not empty the ledger'
+verify_checksums "$PACKAGE_ENABLE_INTERRUPT_DIR" || fail 'interrupted-enable reconciliation left stale checksums'
+
+# Break caught: pm enable can change state and still return nonzero. State and
+# guards, not the command status alone, determine whether the inverse succeeded.
+PACKAGE_ENABLE_NONZERO_DIR="$TEST_TMP/restore-enable-nonzero"
+prepare_package_state
+set_wolf_ready
+run_tool --output "$PACKAGE_ENABLE_NONZERO_DIR" --yes apply || fail "apply failed for nonzero-enable test: $ERR"
+FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE=com.amazon.bueller.music \
+  run_tool restore "$PACKAGE_ENABLE_NONZERO_DIR" || fail "restore rejected verified enable state after nonzero status: $ERR"
+assert_contains "$(cat "$PACKAGE_ENABLE_NONZERO_DIR/restore-journal.txt")" 'success-after-error com.amazon.bueller.music'
+[ ! -s "$PACKAGE_ENABLE_NONZERO_DIR/disabled-successfully.txt" ] || fail 'nonzero-enable recovery did not empty the ledger'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package resolve-activity --brief -a android.settings.WIFI_SETTINGS'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'get-state'
+awk '
+  /pm enable --user 0/ {
+    if (pending && !(packages && wolf && bluetooth && vpn && home && whisper && settings && usb_adb && network)) exit 1
+    pending = 1
+    packages = wolf = bluetooth = vpn = home = whisper = settings = usb_adb = network = 0
+    next
+  }
+  pending && /pm list packages -e/ { packages = 1 }
+  pending && /dumpsys package com.wolf.firelauncher/ { wolf = 1 }
+  pending && /settings get global bluetooth_on/ { bluetooth = 1 }
+  pending && /settings get secure always_on_vpn_app/ { vpn = 1 }
+  pending && /resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME/ { home = 1 }
+  pending && /netstat -ltn/ { whisper = 1 }
+  pending && /resolve-activity --brief -a android.settings.WIFI_SETTINGS/ { settings = 1 }
+  pending && /getprop sys.usb.config/ { usb_adb = 1 }
+  pending && /get-state/ { network = 1 }
+  END { exit !(pending && packages && wolf && bluetooth && vpn && home && whisper && settings && usb_adb && network) }
+' "$FAKE_ADB_LOG" || fail 'restore did not run every guard category after each enable'
+
+# Break caught: restore must reload the checksummed audit baseline and run the
+# compact safety guard after each successful enable before pruning its ledger.
+PACKAGE_RESTORE_GUARD_DIR="$TEST_TMP/restore-guard"
+prepare_package_state
+set_wolf_ready
+run_tool --output "$PACKAGE_RESTORE_GUARD_DIR" --yes apply || fail "apply failed for restore-guard test: $ERR"
+if FAKE_AFTER_ENABLE_BLUETOOTH_ON=0 run_tool restore "$PACKAGE_RESTORE_GUARD_DIR"; then
+  fail 'restore accepted Bluetooth drift after enable'
+fi
+assert_contains "$ERR" 'guard changed bluetooth_on expected=1 actual=0'
+assert_contains "$(cat "$PACKAGE_RESTORE_GUARD_DIR/restore-journal.txt")" 'guard-failure com.amazon.bueller.music'
+assert_contains "$(cat "$PACKAGE_RESTORE_GUARD_DIR/disabled-successfully.txt")" 'com.amazon.bueller.music'
+awk '
+  /pm enable --user 0 com.amazon.bueller.music/ { enabled = NR }
+  /settings get global bluetooth_on/ { bluetooth = NR }
+  END { exit !(enabled && bluetooth && enabled < bluetooth) }
+' "$FAKE_ADB_LOG" || fail 'restore did not run Bluetooth guard after enable'
+verify_checksums "$PACKAGE_RESTORE_GUARD_DIR" || fail 'restore guard failure left stale checksums'
 
 # Break caught: restore must parse only trusted journal files rather than execute a supplied script, even if an attacker recomputes checksums.
 PACKAGE_TRUST_DIR="$TEST_TMP/apply-restore-trust"

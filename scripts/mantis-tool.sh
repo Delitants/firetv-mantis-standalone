@@ -298,8 +298,15 @@ write_settings_route_resolvers() {
 write_verification_baseline() {
   audit_file=$1
   : > "$audit_file"
-  for key in persist.sys.locale system_locales persist.adb.tcp.port; do
+  for key in \
+    persist.sys.locale system_locales persist.sys.usb.config sys.usb.config \
+    service.adb.tcp.port persist.adb.tcp.port init.svc.adbd
+  do
     read_shell getprop "$key" || return 1
+    printf '%s=%s\n' "$key" "$ACTUAL" >> "$audit_file"
+  done
+  for key in bluetooth_on adb_enabled development_settings_enabled; do
+    read_shell settings get global "$key" || return 1
     printf '%s=%s\n' "$key" "$ACTUAL" >> "$audit_file"
   done
   for key in always_on_vpn_app always_on_vpn_lockdown; do
@@ -336,12 +343,6 @@ EOF
 
 write_restore_script() {
   audit_file=$1
-  capability=$2
-  restore_allowlist=$(awk 'NR == 1 { printf "%s", $0; next } { printf "|%s", $0 }' "$MANIFEST_DIR/remove-user0.txt") || return 1
-  case "$capability" in
-    pm-disable-enable) restore_command='pm enable' ;;
-    *) restore_command=false ;;
-  esac
   cat > "$audit_file" <<EOF
 #!/bin/sh
 set -eu
@@ -349,100 +350,17 @@ set -eu
 ADB=\${ADB:-adb}
 : "\${SERIAL:?set SERIAL to the target adb serial}"
 backup_dir=\$(CDPATH= cd -- "\$(dirname "\$0")" && pwd)
-disabled_file=\$backup_dir/disabled-successfully.txt
-mode_file=\$backup_dir/package-mode.txt
-
-(
-  cd "\$backup_dir"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -c SHA256SUMS >/dev/null
-  else
-    shasum -a 256 -c SHA256SUMS >/dev/null
-  fi
-) || {
-  printf '%s\n' 'backup integrity verification failed' >&2
+MANTIS_TOOL=\${MANTIS_TOOL:-$SCRIPT_DIR/mantis-tool.sh}
+[ -x "\$MANTIS_TOOL" ] || {
+  printf '%s\n' 'set MANTIS_TOOL to the reviewed executable mantis-tool.sh' >&2
   exit 1
 }
 
-expected_mode='PACKAGE_OPERATION=pm disable-user --user 0
-PACKAGE_RESTORE=pm enable --user 0'
-[ -f "\$mode_file" ] && [ "\$(cat "\$mode_file")" = "\$expected_mode" ] || {
-  printf '%s\n' 'backup package mode mismatch' >&2
-  exit 1
-}
-
-adb_shell() {
-  "\$ADB" -s "\$SERIAL" shell "\$@"
-}
-
-expect_prop() {
-  property=\$1
-  expected=\$2
-  actual=\$(adb_shell getprop "\$property")
-  [ "\$actual" = "\$expected" ] || {
-    printf 'restore target mismatch: %s expected=%s actual=%s\\n' "\$property" "\$expected" "\$actual" >&2
-    exit 1
-  }
-}
-
-expect_shell() {
-  label=\$1
-  expected=\$2
-  shift 2
-  actual=\$(adb_shell "\$@")
-  [ "\$actual" = "\$expected" ] || {
-    printf 'restore target mismatch: %s expected=%s actual=%s\\n' "\$label" "\$expected" "\$actual" >&2
-    exit 1
-  }
-}
-
-expect_prop ro.product.manufacturer Amazon
-expect_prop ro.product.model AFTMM
-expect_prop ro.product.device mantis
-expect_prop ro.build.id NS6711
-expect_prop ro.build.version.incremental 0011644900484
-expect_prop ro.build.version.release 7.1.2
-expect_prop ro.build.version.sdk 25
-expect_prop ro.product.cpu.abi armeabi-v7a
-expect_shell 'uname -m' armv7l uname -m
-expect_shell getenforce Enforcing getenforce
-expect_shell uid 2000 id -u
-
-restore_package() {
-  enabled=\$(adb_shell pm list packages -e)
-  disabled=\$(adb_shell pm list packages -d)
-  if printf '%s\n' "\$enabled" | grep -Fx "package:\$1" >/dev/null ||
-    ! printf '%s\n' "\$disabled" | grep -Fx "package:\$1" >/dev/null
-  then
-    printf 'restore precondition failed for %s\n' "\$1" >&2
-    return 1
-  fi
-  adb_shell $restore_command --user 0 "\$1"
-  enabled=\$(adb_shell pm list packages -e)
-  disabled=\$(adb_shell pm list packages -d)
-  printf '%s\n' "\$enabled" | grep -Fx "package:\$1" >/dev/null
-  if printf '%s\n' "\$disabled" | grep -Fx "package:\$1" >/dev/null; then
-    printf 'restore verification failed for %s\n' "\$1" >&2
-    return 1
-  fi
-}
-
-[ -f "\$disabled_file" ] || exit 0
-awk '{ lines[NR] = \$0 } END { for (line = NR; line > 0; line--) print lines[line] }' "\$disabled_file" |
-while IFS= read -r package; do
-  case "\$package" in
-    ''|*[!A-Za-z0-9._]*)
-      printf 'invalid recorded package: %s\\n' "\$package" >&2
-      exit 1
-      ;;
-    $restore_allowlist) ;;
-    *)
-      printf 'invalid recorded package: %s\n' "\$package" >&2
-      exit 1
-      ;;
-  esac
-  restore_package "\$package"
-done
+if [ -n "\${NETWORK_SERIAL:-}" ]; then
+  exec "\$MANTIS_TOOL" --adb "\$ADB" --serial "\$SERIAL" \
+    --network-serial "\$NETWORK_SERIAL" restore "\$backup_dir"
+fi
+exec "\$MANTIS_TOOL" --adb "\$ADB" --serial "\$SERIAL" restore "\$backup_dir"
 EOF
   chmod 700 "$audit_file"
 }
@@ -515,6 +433,7 @@ publish_audit() {
     ! write_restore_script "$work_dir/restore-user0.sh" "$PACKAGE_STATE_CAPABILITY" ||
     ! : > "$work_dir/disabled-successfully.txt" ||
     ! : > "$work_dir/operation-journal.txt" ||
+    ! : > "$work_dir/restore-journal.txt" ||
     ! checksum_files "$work_dir"
   then
     retain_staging "$work_dir"
@@ -568,12 +487,8 @@ restore_command() {
 
 restore_package() {
   [ "$PACKAGE_STATE_CAPABILITY" = pm-disable-enable ] || return 1
-  capture_package_state "$1" || return 1
-  if package_list_contains "$PACKAGE_ENABLED" "$1" || ! package_list_contains "$PACKAGE_DISABLED" "$1"; then
-    printf 'restore precondition failed for %s\n' "$1" >&2
-    return 1
-  fi
-  adb_shell pm enable --user 0 "$1" || return 1
+  RESTORE_ENABLE_STATUS=0
+  adb_shell pm enable --user 0 "$1" || RESTORE_ENABLE_STATUS=$?
   capture_package_state "$1" || return 1
   package_list_contains "$PACKAGE_ENABLED" "$1" || {
     printf 'restore verification failed for %s: not enabled\n' "$1" >&2
@@ -925,7 +840,7 @@ require_tcp_8009() {
 capture_tun0_state() {
   if tun0_output=$(adb_shell ip link show tun0); then
     strip_one_trailing_cr "$tun0_output"
-    [ -n "$NORMALIZED" ] && GUARD_TUN0_STATE="present:$NORMALIZED" || GUARD_TUN0_STATE=absent
+    [ -n "$NORMALIZED" ] && GUARD_TUN0_STATE=present || GUARD_TUN0_STATE=absent
   else
     GUARD_TUN0_STATE=absent
   fi
@@ -963,6 +878,9 @@ capture_guard_baseline() {
   [ "$GUARD_SERVICE_ADB_TCP_PORT" = 5555 ] || { printf 'guard service.adb.tcp.port expected=5555 actual=%s\n' "$GUARD_SERVICE_ADB_TCP_PORT" >&2; return 1; }
   read_guard_value persist_adb_tcp_port getprop persist.adb.tcp.port || return 1
   GUARD_PERSIST_ADB_TCP_PORT=$GUARD_VALUE
+  read_guard_value init_svc_adbd getprop init.svc.adbd || return 1
+  GUARD_INIT_SVC_ADBD=$GUARD_VALUE
+  [ "$GUARD_INIT_SVC_ADBD" = running ] || { printf 'guard init.svc.adbd expected=running actual=%s\n' "$GUARD_INIT_SVC_ADBD" >&2; return 1; }
   read_guard_value adbd pidof adbd || return 1
   GUARD_ADBD_PID=$GUARD_VALUE
   [ -n "$GUARD_ADBD_PID" ] || { printf '%s\n' 'guard adbd is not running' >&2; return 1; }
@@ -980,6 +898,59 @@ capture_guard_baseline() {
   esac
   read_adb_transport || return 1
   [ "$GUARD_VALUE" = device ] || { printf 'guard TCP 5555 is not reachable: %s\n' "$GUARD_VALUE" >&2; return 1; }
+}
+
+read_baseline_value() {
+  baseline_file=$1
+  baseline_key=$2
+  if ! BASELINE_VALUE=$(awk -F= -v key="$baseline_key" '
+    $1 == key { count++; sub(/^[^=]*=/, ""); value = $0 }
+    END { if (count != 1) exit 1; printf "%s", value }
+  ' "$baseline_file"); then
+    printf 'baseline key is missing or duplicated: %s\n' "$baseline_key" >&2
+    return 1
+  fi
+}
+
+load_guard_baseline() {
+  baseline_dir=$1
+  baseline_file=$baseline_dir/verification-baseline.txt
+  [ -f "$baseline_file" ] && [ ! -L "$baseline_file" ] || {
+    printf '%s\n' 'baseline verification state is missing' >&2
+    return 1
+  }
+  read_baseline_value "$baseline_file" bluetooth_on || return 1; GUARD_BLUETOOTH_ON=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" persist.sys.locale || return 1; GUARD_LOCALE=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" system_locales || return 1; GUARD_SYSTEM_LOCALES=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" adb_enabled || return 1; GUARD_ADB_ENABLED=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" development_settings_enabled || return 1; GUARD_DEVELOPMENT_SETTINGS_ENABLED=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" persist.sys.usb.config || return 1; GUARD_PERSIST_USB_CONFIG=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" sys.usb.config || return 1; GUARD_SYS_USB_CONFIG=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" service.adb.tcp.port || return 1; GUARD_SERVICE_ADB_TCP_PORT=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" persist.adb.tcp.port || return 1; GUARD_PERSIST_ADB_TCP_PORT=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" init.svc.adbd || return 1; GUARD_INIT_SVC_ADBD=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" always_on_vpn_app || return 1; GUARD_ALWAYS_ON_VPN_APP=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" always_on_vpn_lockdown || return 1; GUARD_ALWAYS_ON_VPN_LOCKDOWN=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" tun0 || return 1; GUARD_BASELINE_TUN0_STATE=$BASELINE_VALUE
+  [ "$GUARD_BLUETOOTH_ON" = 1 ] || return 1
+  [ "$GUARD_ADB_ENABLED" = 1 ] || return 1
+  require_usb_adb "$GUARD_PERSIST_USB_CONFIG" || return 1
+  require_usb_adb "$GUARD_SYS_USB_CONFIG" || return 1
+  [ "$GUARD_SERVICE_ADB_TCP_PORT" = 5555 ] || return 1
+  [ "$GUARD_INIT_SVC_ADBD" = running ] || return 1
+  case "$GUARD_BASELINE_TUN0_STATE" in present|absent) ;; *) return 1 ;; esac
+  read_guard_value adbd pidof adbd || return 1
+  GUARD_ADBD_PID=$GUARD_VALUE
+  [ -n "$GUARD_ADBD_PID" ] || return 1
+  case "$SERIAL" in
+    *:5555) ;;
+    *) [ -n "$NETWORK_SERIAL" ] || { printf '%s\n' 'USB primary requires --network-serial ending in :5555' >&2; return 1; } ;;
+  esac
+  case "${NETWORK_SERIAL:-$SERIAL}" in
+    *:5555) ;;
+    *) printf '%s\n' 'network serial must end in :5555' >&2; return 1 ;;
+  esac
+  require_network_target || return 1
 }
 
 guard_unchanged_value() {
@@ -1009,6 +980,7 @@ compact_guard() {
   guard_unchanged_value service_adb_tcp_port "$GUARD_SERVICE_ADB_TCP_PORT" getprop service.adb.tcp.port || return 1
   [ "$GUARD_VALUE" = 5555 ] || return 1
   guard_unchanged_value persist_adb_tcp_port "$GUARD_PERSIST_ADB_TCP_PORT" getprop persist.adb.tcp.port || return 1
+  guard_unchanged_value init_svc_adbd "$GUARD_INIT_SVC_ADBD" getprop init.svc.adbd || return 1
   guard_unchanged_value adbd "$GUARD_ADBD_PID" pidof adbd || return 1
   [ -n "$GUARD_VALUE" ] || { printf '%s\n' 'guard adbd is not running' >&2; return 1; }
   guard_unchanged_value always_on_vpn_app "$GUARD_ALWAYS_ON_VPN_APP" settings get secure always_on_vpn_app || return 1
@@ -1021,24 +993,23 @@ compact_guard() {
   require_home_resolver || return 1
   require_tcp_8009 || return 1
   require_settings_routes || return 1
+  require_network_target || return 1
   read_adb_transport || return 1
   [ "$GUARD_VALUE" = device ] || { printf 'guard TCP 5555 is not reachable: %s\n' "$GUARD_VALUE" >&2; return 1; }
 }
 
 rollback_recorded_packages() {
   removed_file=$1
+  backup_dir=$(dirname "$removed_file")
+  restore_journal=$backup_dir/restore-journal.txt
   rollback_file=$(mktemp "${TMPDIR:-/tmp}/mantis-rollback.XXXXXX") || return 1
   awk '{ lines[NR] = $0 } END { for (line = NR; line > 0; line--) print lines[line] }' "$removed_file" > "$rollback_file"
   rollback_ok=yes
   while IFS= read -r rollback_package; do
     [ -n "$rollback_package" ] || continue
-    if ! restore_package "$rollback_package"; then
+    recorded_package_exists "$removed_file" "$rollback_package" || continue
+    if ! restore_recorded_package "$backup_dir" "$rollback_package"; then
       printf 'rollback failed for %s\n' "$rollback_package" >&2
-      rollback_ok=no
-      break
-    fi
-    if ! remove_recorded_package "$removed_file" "$rollback_package"; then
-      printf 'rollback ledger update failed for %s\n' "$rollback_package" >&2
       rollback_ok=no
       break
     fi
@@ -1054,7 +1025,9 @@ rollback_batch() {
   rollback_ok=yes
   if [ -n "$failed_package" ]; then
     printf 'rollback %s\n' "$failed_package" >> "$journal_file"
-    restore_package "$failed_package" || rollback_ok=no
+    if recorded_package_exists "$removed_file" "$failed_package"; then
+      restore_recorded_package "$(dirname "$removed_file")" "$failed_package" || rollback_ok=no
+    fi
   fi
   rollback_recorded_packages "$removed_file" || rollback_ok=no
   [ "$rollback_ok" = yes ]
@@ -1107,10 +1080,82 @@ remove_recorded_package() {
   replace_recorded_ledger "$removed_file" "$ledger_tmp"
 }
 
+append_restore_record() {
+  backup_dir=$1
+  restore_state=$2
+  restore_target=$3
+  printf '%s %s\n' "$restore_state" "$restore_target" >> "$backup_dir/restore-journal.txt" || return 1
+  refresh_backup_checksums "$backup_dir"
+}
+
+restore_recorded_package() {
+  backup_dir=$1
+  restore_target=$2
+  removed_file=$backup_dir/disabled-successfully.txt
+  capture_package_state "$restore_target" || return 1
+  if package_list_contains "$PACKAGE_ENABLED" "$restore_target" ||
+    ! package_list_contains "$PACKAGE_DISABLED" "$restore_target"
+  then
+    printf 'restore precondition failed for %s\n' "$restore_target" >&2
+    return 1
+  fi
+  append_restore_record "$backup_dir" attempt "$restore_target" || return 1
+  if restore_package "$restore_target"; then
+    if [ "$RESTORE_ENABLE_STATUS" -eq 0 ]; then restore_result=success
+    else restore_result=success-after-error
+    fi
+    append_restore_record "$backup_dir" "$restore_result" "$restore_target" || return 1
+  else
+    append_restore_record "$backup_dir" failure "$restore_target" || return 1
+    return 1
+  fi
+  if ! compact_guard; then
+    append_restore_record "$backup_dir" guard-failure "$restore_target" || true
+    return 1
+  fi
+  remove_recorded_package "$removed_file" "$restore_target"
+}
+
+reconcile_attempted_enables() {
+  backup_dir=$1
+  removed_file=$backup_dir/disabled-successfully.txt
+  restore_journal=$backup_dir/restore-journal.txt
+  restore_snapshot=$(mktemp "${TMPDIR:-/tmp}/mantis-restore-journal.XXXXXX") || return 1
+  cp "$restore_journal" "$restore_snapshot" || { rm -f "$restore_snapshot"; return 1; }
+  reconcile_ok=yes
+  while IFS=' ' read -r restore_state restore_target restore_extra; do
+    [ "$restore_state" = attempt ] || continue
+    [ -z "${restore_extra:-}" ] || { reconcile_ok=no; break; }
+    recorded_package_exists "$removed_file" "$restore_target" || continue
+    capture_package_state "$restore_target" || { reconcile_ok=no; break; }
+    if package_list_contains "$PACKAGE_ENABLED" "$restore_target" &&
+      ! package_list_contains "$PACKAGE_DISABLED" "$restore_target"
+    then
+      if ! compact_guard; then
+        append_restore_record "$backup_dir" guard-failure "$restore_target" || true
+        reconcile_ok=no
+        break
+      fi
+      append_restore_record "$backup_dir" reconciled-enabled "$restore_target" || { reconcile_ok=no; break; }
+      remove_recorded_package "$removed_file" "$restore_target" || { reconcile_ok=no; break; }
+    elif package_list_contains "$PACKAGE_DISABLED" "$restore_target" &&
+      ! package_list_contains "$PACKAGE_ENABLED" "$restore_target"
+    then
+      :
+    else
+      printf 'restore reconciliation found invalid state for %s\n' "$restore_target" >&2
+      reconcile_ok=no
+      break
+    fi
+  done < "$restore_snapshot"
+  rm -f "$restore_snapshot"
+  [ "$reconcile_ok" = yes ]
+}
+
 verify_backup_integrity() {
   backup_dir=$1
   [ -d "$backup_dir" ] && [ ! -L "$backup_dir" ] || return 1
-  for backup_file in device.txt disabled-successfully.txt operation-journal.txt package-mode.txt SHA256SUMS; do
+  for backup_file in device.txt disabled-successfully.txt operation-journal.txt restore-journal.txt package-mode.txt SHA256SUMS; do
     [ -f "$backup_dir/$backup_file" ] && [ ! -L "$backup_dir/$backup_file" ] || return 1
   done
   (
@@ -1138,6 +1183,7 @@ validate_restore_journal() {
   backup_dir=$1
   removed_file=$backup_dir/disabled-successfully.txt
   operation_file=$backup_dir/operation-journal.txt
+  restore_file=$backup_dir/restore-journal.txt
   while IFS= read -r package; do
     validate_recorded_package "$package" || {
       printf 'invalid recorded package: %s\n' "$package" >&2
@@ -1156,6 +1202,18 @@ validate_restore_journal() {
       return 1
     }
   done < "$operation_file"
+  while IFS=' ' read -r journal_state journal_package journal_extra; do
+    [ -n "$journal_state" ] || continue
+    [ -z "${journal_extra:-}" ] || { printf '%s\n' 'invalid restore journal record' >&2; return 1; }
+    case "$journal_state" in
+      attempt|success|success-after-error|failure|guard-failure|reconciled-enabled) ;;
+      *) printf 'invalid restore journal state: %s\n' "$journal_state" >&2; return 1 ;;
+    esac
+    validate_recorded_package "$journal_package" || {
+      printf 'invalid restore journal package: %s\n' "$journal_package" >&2
+      return 1
+    }
+  done < "$restore_file"
 }
 
 reconcile_attempted_disables() {
@@ -1282,8 +1340,11 @@ restore_backup() {
   require_package_state_capability
   validate_restore_journal "$backup_dir" || exit 1
   reconcile_attempted_disables "$backup_dir" || { printf '%s\n' 'backup reconciliation failed' >&2; exit 1; }
+  load_guard_baseline "$backup_dir" || { printf '%s\n' 'could not load audit guard baseline' >&2; exit 1; }
+  reconcile_attempted_enables "$backup_dir" || { printf '%s\n' 'restore reconciliation failed' >&2; exit 1; }
   removed_file=$backup_dir/disabled-successfully.txt
   rollback_recorded_packages "$removed_file" || { printf '%s\n' 'restore failed before all packages were restored' >&2; exit 1; }
+  compact_guard || { printf '%s\n' 'final restore guard failed' >&2; exit 1; }
   printf '%s\n' 'RESTORE=PASS'
 }
 

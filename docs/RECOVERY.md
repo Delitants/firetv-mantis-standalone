@@ -49,13 +49,21 @@ recorded successful-disable ledger in reverse order:
 scripts/mantis-tool.sh --serial SERIAL restore AUDIT_DIRECTORY
 ```
 
-The generated `restore-user0.sh` is a fallback tied to its audit directory. It
-verifies that directory's checksums and package-operation mode, accepts only the
-embedded candidate allowlist, requires each ledger package to be disabled
-before acting, and verifies that it is enabled afterward. The controller
-`restore` command additionally reconciles an interrupted disable and updates
-the checksummed ledger after each successful enable, so prefer it when the
-repository is available.
+The generated `restore-user0.sh` is a resumable entry point tied to its audit
+directory. It invokes the reviewed controller at the path embedded when the
+audit was created; if that checkout moved, set `MANTIS_TOOL` to the reviewed
+`mantis-tool.sh`. It forwards `ADB`, `SERIAL`, and optional `NETWORK_SERIAL` to
+the same restore implementation rather than maintaining a weaker second copy.
+
+Restore verifies the directory's checksums, package-operation mode, exact
+target, and manifest ownership. It reconciles interrupted disables, then uses
+the checksummed `restore-journal.txt` to reconcile only journal-backed ledger
+entries that are already observed enabled. An enable that changed state despite
+a nonzero command result is accepted only after both package inventories prove
+the transition. After every successful or reconciled enable, the controller
+runs the preserved-app, Bluetooth, Whisper/Home/Settings, VPN, and USB/network
+ADB guards before removing that package from the checksummed ledger. A failed
+guard retains the ledger entry and prevents `RESTORE=PASS`.
 
 Do not reboot before pre-reboot verification and a rollback rehearsal. Locale
 is never changed by this controller. If a preferred language is offered, use

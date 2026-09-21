@@ -29,12 +29,14 @@ Package tests use the enabled inventory as the operative set and require each
 successful candidate to move into the disabled inventory. They cover missing
 help syntax, already-disabled skips, silent no-effect rejection, interruption
 between disable and journal success, reverse restore, partial enable failure,
-checksum/tamper rejection, and the exact 32-entry candidate manifest. These are
-controller tests, not a claim that a live package transition or reboot passed.
-The same full suite is exercised with the local default `sh` and `/bin/dash`.
-Generated recovery is tested for checksum and mode binding, embedded manifest
-membership, disabled-before/enabled-after state, and refusal to re-enable an
-already-enabled package.
+interruption after enable but before ledger pruning, an enable that mutates
+state while returning nonzero, post-enable guard failure, checksum/tamper
+rejection, and the exact 32-entry candidate manifest. These are controller
+tests, not a claim that a live package transition or reboot passed. The same
+full suite is exercised with the local default `sh` and `/bin/dash`. Generated
+recovery is tested as a resumable controller entry point, including checksum and
+mode binding, manifest membership, disabled-before/enabled-after state, and
+idempotent completion after the ledger is empty.
 
 The smoke verifier parses only the current-focus field, waits in bounded steps
 for asynchronous Launcher activity changes, and cleans its temporary hierarchy

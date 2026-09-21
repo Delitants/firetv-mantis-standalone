@@ -155,7 +155,13 @@ case "$1" in
   settings)
     [ "${2:-}" = "get" ] || { printf '%s\n' 'fake adb only exposes settings get' >&2; exit 64; }
     case "${3:-}:${4:-}" in
-      global:bluetooth_on) value=${FAKE_BLUETOOTH_ON:-1} ;;
+      global:bluetooth_on)
+        if [ -n "${FAKE_AFTER_ENABLE_BLUETOOTH_ON+x}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
+          awk '$1 == "active" && ($2 == "com.amazon.android.marketplace" || $2 == "com.amazon.bueller.music") { found=1 } END { exit !found }' "$FAKE_PACKAGE_STATE"
+        then value=$FAKE_AFTER_ENABLE_BLUETOOTH_ON
+        else value=${FAKE_BLUETOOTH_ON:-1}
+        fi
+        ;;
       global:adb_enabled)
         if [ -n "${FAKE_AFTER_DISABLE_ADB_ENABLED:-}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
           awk -v after_count="${FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT:-1}" '
@@ -232,12 +238,23 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'}
           printf 'invalid fake pm enable command: %s\n' "$*" >&2
           exit 64
         }
-        if [ "${FAKE_ENABLE_FAIL_PACKAGE:-}" = "${5}" ]; then
+        package=${5}
+        if [ "${FAKE_ENABLE_FAIL_PACKAGE:-}" = "$package" ]; then
           printf '%s\n' 'Error: could not enable package'
           exit 1
         fi
-        replace_package_state "${5}" active
-        value="Package ${5} new state: default"
+        replace_package_state "$package" active
+        if [ -n "${FAKE_ENABLE_INTERRUPT_MARKER:-}" ]; then
+          : > "$FAKE_ENABLE_INTERRUPT_MARKER"
+          while [ -e "$FAKE_ENABLE_INTERRUPT_MARKER" ]; do
+            sleep 1
+          done
+        fi
+        if [ "${FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE:-}" = "$package" ]; then
+          printf '%s\n' 'Error: enable reported failure after state change'
+          exit 1
+        fi
+        value="Package $package new state: default"
         ;;
       disable-user)
         [ "${3:-}" = "--user" ] && [ "${4:-}" = "0" ] && [ -n "${5:-}" ] || {

@@ -18,7 +18,13 @@ already present only in the disabled inventory is skipped and never recorded
 for restore. A candidate in neither inventory, or in both, is a hard failure.
 Only verified state transitions enter the checksummed
 `disabled-successfully.txt` ledger; restore runs `pm enable --user 0` over that
-ledger in reverse order and verifies the inverse transition.
+ledger in reverse order and verifies the inverse transition. Before each
+inverse, it writes and checksums an `attempt` in `restore-journal.txt`; a
+verified result is also checksummed before the ledger entry is removed. On a
+later run, only a still-recorded manifest package with that durable attempt can
+be reconciled from an already-enabled state. Every successful or reconciled
+enable must pass the preserved-app, Bluetooth, Whisper/Home/Settings, VPN, and
+USB/network ADB guards before its ledger entry is pruned.
 
 Wolf Launcher is pinned to version code `11900120` and version name
 `0.1.9-Wolf`, package `com.wolf.firelauncher`, and its launcher activity. An
