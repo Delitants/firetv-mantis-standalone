@@ -83,11 +83,28 @@ assert_contains "$OUT" 'RESTORE_CAPABILITY=cmd'
 assert_contains "$OUT" 'AUDIT=PASS'
 assert_contains "$(cat "$AUDIT_DIR/device.txt")" 'persist.sys.locale=en-US'
 assert_contains "$(cat "$AUDIT_DIR/device.txt")" 'system_locales=en-US'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.SETTINGS=com.amazon.tv.settings/.SettingsActivity'
 assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.WIFI_SETTINGS=com.amazon.tv.settings/.wifi.WifiSettingsActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.MANAGE_APPLICATIONS_SETTINGS=com.amazon.tv.settings/.applications.ManageApplicationsActivity'
 assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.CONTROLLERS_SETTINGS=com.amazon.tv.settings/.controllers.ControllersActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.DEVICE_INFO_SETTINGS=com.amazon.tv.settings/.device.DeviceInfoSettingsActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.ACCESSIBILITY_SETTINGS=com.amazon.tv.settings/.accessibility.AccessibilitySettingsActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.DISPLAY_SETTINGS=com.amazon.tv.settings/.display.DisplaySettingsActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'com.amazon.device.settings.action.DATE_TIME=com.amazon.tv.settings/.date.DateTimeSettingsActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'com.amazon.device.settings.action.LANGUAGE=com.amazon.tv.settings/.locale.LocaleSettingsActivity'
 assert_contains "$(cat "$AUDIT_DIR/home-resolver.txt")" 'com.amazon.tv.launcher/.HomeActivity'
 assert_contains "$(cat "$AUDIT_DIR/bluetooth.txt")" 'bluetooth_on=1'
 assert_contains "$(cat "$AUDIT_DIR/tun0.txt")" 'tun0:'
+
+# Break caught: accepting a destination created between preflight and publish.
+RACE_AUDIT_DIR="$TEST_TMP/audit-race"
+if PATH="$ROOT/tests/fixtures:$PATH" RACE_OUTPUT_DIR="$RACE_AUDIT_DIR" run_tool --output "$RACE_AUDIT_DIR" audit; then
+  fail 'audit accepted an output directory that appeared during publication'
+fi
+assert_contains "$ERR" 'audit output appeared during publication'
+[ -d "$RACE_AUDIT_DIR" ] || fail 'race fixture did not create the destination directory'
+[ -z "$(find "$RACE_AUDIT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
+  fail 'audit left its staged backup nested in the raced destination'
 
 # Break caught: preferring a cmd form that does not prove --user support.
 PM_AUDIT_DIR="$TEST_TMP/audit-pm"
@@ -112,6 +129,27 @@ assert_contains "$(cat "$TEST_TMP/restore-err")" 'ro.build.version.release expec
 case "$(cat "$FAKE_ADB_LOG")" in
   *install-existing*) fail 'restore attempted installation on a mismatched target' ;;
 esac
+
+# Break caught: treating prose or similarly named commands as a rollback form.
+MISLEADING_AUDIT_DIR="$TEST_TMP/audit-misleading-help"
+FAKE_CMD_PACKAGE_HELP='Use install-existing --user only after a warning' \
+  FAKE_PM_HELP='install-existing-extra --user USER_ID PACKAGE' \
+  run_tool --output "$MISLEADING_AUDIT_DIR" audit || fail "misleading help audit failed: $ERR"
+assert_contains "$OUT" 'RESTORE_CAPABILITY=none'
+INCOMPLETE_HELP_AUDIT_DIR="$TEST_TMP/audit-incomplete-help"
+FAKE_CMD_PACKAGE_HELP='install-existing --user' FAKE_PM_HELP='install-existing --user' \
+  run_tool --output "$INCOMPLETE_HELP_AUDIT_DIR" audit || fail "incomplete help audit failed: $ERR"
+assert_contains "$OUT" 'RESTORE_CAPABILITY=none'
+NON_USAGE_HELP_AUDIT_DIR="$TEST_TMP/audit-non-usage-help"
+FAKE_CMD_PACKAGE_HELP='install-existing --user USER_ID explanatory-text' \
+  FAKE_PM_HELP='install-existing --user USER_ID explanatory-text' \
+  run_tool --output "$NON_USAGE_HELP_AUDIT_DIR" audit || fail "non-usage help audit failed: $ERR"
+assert_contains "$OUT" 'RESTORE_CAPABILITY=none'
+TRAILING_PROSE_HELP_AUDIT_DIR="$TEST_TMP/audit-trailing-prose-help"
+FAKE_CMD_PACKAGE_HELP='install-existing --user USER_ID PACKAGE explanatory-text' \
+  FAKE_PM_HELP='install-existing --user USER_ID PACKAGE explanatory-text' \
+  run_tool --output "$TRAILING_PROSE_HELP_AUDIT_DIR" audit || fail "trailing prose help audit failed: $ERR"
+assert_contains "$OUT" 'RESTORE_CAPABILITY=none'
 
 # Break caught: attempting a user-0 removal without a help-proven rollback path.
 if FAKE_CMD_PACKAGE_HELP='no install commands' FAKE_PM_HELP='no install commands' run_tool --yes apply; then

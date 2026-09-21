@@ -171,7 +171,33 @@ restore_capability() {
 }
 
 help_proves_install_existing() {
-  printf '%s\n' "$1" | awk '/install-existing/ && /--user/ { found = 1 } END { exit found ? 0 : 1 }'
+  printf '%s\n' "$1" | awk '
+    $1 == "install-existing" {
+      usage = 1
+      user = 0
+      package = 0
+      for (field = 2; field <= NF; field++) {
+        token = $field
+        gsub(/^\[/, "", token)
+        gsub(/\]$/, "", token)
+        if (token == "--user" && !user && field < NF) {
+          field++
+          user = $field
+          gsub(/^\[/, "", user)
+          gsub(/\]$/, "", user)
+          if (user == "USER_ID") user = 1
+          else usage = 0
+        } else if (token == "--full" || token == "--wait") {
+        } else if (token == "PACKAGE" && field == NF) {
+          package = 1
+        } else {
+          usage = 0
+        }
+      }
+      if (usage && user && package) found = 1
+    }
+    END { exit found ? 0 : 1 }
+  '
 }
 
 write_shell_capture() {
@@ -347,7 +373,27 @@ publish_audit() {
     rm -rf "$work_dir"
     return 1
   fi
-  mv "$work_dir" "$final_dir"
+  work_name=$(basename "$work_dir")
+  if [ -e "$final_dir" ] || [ -L "$final_dir" ]; then
+    rm -rf "$work_dir"
+    printf 'audit output appeared during publication: %s\n' "$final_dir" >&2
+    return 1
+  fi
+  if ! mv "$work_dir" "$final_dir"; then
+    rm -rf "$work_dir"
+    return 1
+  fi
+  if [ -d "$final_dir/$work_name" ]; then
+    if [ ! -L "$final_dir" ]; then
+      rm -rf "$final_dir/$work_name"
+    fi
+    printf 'audit output appeared during publication: %s\n' "$final_dir" >&2
+    return 1
+  fi
+  [ -d "$final_dir" ] || {
+    printf 'audit output publication failed: %s\n' "$final_dir" >&2
+    return 1
+  }
   printf 'AUDIT_OUTPUT=%s\n' "$final_dir"
 }
 
