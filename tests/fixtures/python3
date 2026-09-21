@@ -3,16 +3,40 @@ set -eu
 
 : "${REAL_PYTHON:?set REAL_PYTHON to the real Python interpreter}"
 
-case "${RACE_OUTPUT_KIND:-}" in
-  directory)
-    mkdir "$RACE_OUTPUT_DIR"
-    printf '%s\n' 'unrelated destination content' > "$RACE_OUTPUT_DIR/keep.txt"
+phase=${2:-}
+if [ -n "${RACE_HELPER_LOG:-}" ]; then
+  printf '%s\n' "$phase" >> "$RACE_HELPER_LOG"
+fi
+
+case "$phase" in
+  inspect)
     ;;
-  symlink)
-    ln -s "$RACE_LINK_TARGET" "$RACE_OUTPUT_DIR"
+  publish)
+    case "${RACE_OUTPUT_KIND:-}" in
+      observe)
+        ;;
+      directory)
+        mkdir "$RACE_OUTPUT_DIR"
+        printf '%s\n' 'unrelated destination content' > "$RACE_OUTPUT_DIR/keep.txt"
+        ;;
+      symlink)
+        ln -s "$RACE_LINK_TARGET" "$RACE_OUTPUT_DIR"
+        ;;
+      source-replacement)
+        source=$3
+        mv "$source" "$source.original"
+        mkdir "$source"
+        printf '%s\n' 'unrelated replacement content' > "$source/keep.txt"
+        printf '%s\n' "$source" > "$RACE_SOURCE_RECORD"
+        ;;
+      *)
+        printf 'unknown publish race kind: %s\n' "${RACE_OUTPUT_KIND:-}" >&2
+        exit 64
+        ;;
+    esac
     ;;
   *)
-    printf 'unknown publish race kind: %s\n' "${RACE_OUTPUT_KIND:-}" >&2
+    printf 'unexpected atomic-rename phase: %s\n' "$phase" >&2
     exit 64
     ;;
 esac

@@ -20,6 +20,7 @@ cleanup() {
 
 trap cleanup EXIT HUP INT TERM
 export FAKE_ADB_LOG="$TEST_TMP/adb.log"
+REAL_PYTHON_BIN=$(command -v python3)
 unset FAKE_MANUFACTURER FAKE_MODEL FAKE_DEVICE FAKE_BUILD_ID FAKE_INCREMENTAL
 unset FAKE_RELEASE FAKE_SDK FAKE_ABI FAKE_UNAME FAKE_ENFORCE FAKE_UID
 unset FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES FAKE_HOME FAKE_BLUETOOTH_ON FAKE_TUN0
@@ -96,14 +97,34 @@ assert_contains "$(cat "$AUDIT_DIR/home-resolver.txt")" 'com.amazon.tv.launcher/
 assert_contains "$(cat "$AUDIT_DIR/bluetooth.txt")" 'bluetooth_on=1'
 assert_contains "$(cat "$AUDIT_DIR/tun0.txt")" 'tun0:'
 
+# Break caught: bypassing the production atomic-rename helper on normal publication.
+HELPER_AUDIT_DIR="$TEST_TMP/audit-helper"
+HELPER_LOG="$TEST_TMP/atomic-rename.log"
+if (
+  PATH="$ROOT/tests/fixtures:$PATH"
+  REAL_PYTHON="$REAL_PYTHON_BIN"
+  RACE_OUTPUT_KIND=observe
+  RACE_HELPER_LOG="$HELPER_LOG"
+  export PATH REAL_PYTHON RACE_OUTPUT_KIND RACE_HELPER_LOG
+  run_tool --output "$HELPER_AUDIT_DIR" audit
+); then
+  :
+else
+  fail "atomic helper audit failed: $(cat "$TEST_TMP/err")"
+fi
+assert_file "$HELPER_AUDIT_DIR/device.txt"
+assert_contains "$(cat "$HELPER_LOG")" inspect
+assert_contains "$(cat "$HELPER_LOG")" publish
+
 # Break caught: placing a backup in a directory created at publish time.
 RACE_AUDIT_DIR="$TEST_TMP/audit-race"
 if (
   PATH="$ROOT/tests/fixtures:$PATH"
-  REAL_PYTHON="$(command -v python3)"
+  REAL_PYTHON="$REAL_PYTHON_BIN"
   RACE_OUTPUT_KIND=directory
   RACE_OUTPUT_DIR="$RACE_AUDIT_DIR"
-  export PATH REAL_PYTHON RACE_OUTPUT_KIND RACE_OUTPUT_DIR
+  RACE_HELPER_LOG="$TEST_TMP/atomic-directory.log"
+  export PATH REAL_PYTHON RACE_OUTPUT_KIND RACE_OUTPUT_DIR RACE_HELPER_LOG
   run_tool --output "$RACE_AUDIT_DIR" audit
 ); then
   fail 'audit accepted an output directory that appeared during publication'
@@ -122,11 +143,12 @@ mkdir "$RACE_LINK_TARGET"
 printf '%s\n' 'unrelated symlink target content' > "$RACE_LINK_TARGET/keep.txt"
 if (
   PATH="$ROOT/tests/fixtures:$PATH"
-  REAL_PYTHON="$(command -v python3)"
+  REAL_PYTHON="$REAL_PYTHON_BIN"
   RACE_OUTPUT_KIND=symlink
   RACE_OUTPUT_DIR="$RACE_SYMLINK_AUDIT_DIR"
   RACE_LINK_TARGET="$RACE_LINK_TARGET"
-  export PATH REAL_PYTHON RACE_OUTPUT_KIND RACE_OUTPUT_DIR RACE_LINK_TARGET
+  RACE_HELPER_LOG="$TEST_TMP/atomic-symlink.log"
+  export PATH REAL_PYTHON RACE_OUTPUT_KIND RACE_OUTPUT_DIR RACE_LINK_TARGET RACE_HELPER_LOG
   run_tool --output "$RACE_SYMLINK_AUDIT_DIR" audit
 ); then
   fail 'audit accepted an output symlink that appeared during publication'
@@ -137,6 +159,31 @@ assert_contains "$ERR" 'audit output publication conflict'
 [ -L "$RACE_SYMLINK_AUDIT_DIR" ] || fail 'race fixture did not create the output symlink'
 assert_contains "$(cat "$RACE_LINK_TARGET/keep.txt")" 'unrelated symlink target content'
 [ ! -e "$RACE_LINK_TARGET/device.txt" ] || fail 'audit followed the raced output symlink'
+
+# Break caught: publishing a staging path replaced after it was identified.
+RACE_SOURCE_AUDIT_DIR="$TEST_TMP/audit-race-source"
+RACE_SOURCE_RECORD="$TEST_TMP/replaced-source-path"
+if (
+  PATH="$ROOT/tests/fixtures:$PATH"
+  REAL_PYTHON="$REAL_PYTHON_BIN"
+  RACE_OUTPUT_KIND=source-replacement
+  RACE_HELPER_LOG="$TEST_TMP/atomic-source.log"
+  RACE_SOURCE_RECORD="$RACE_SOURCE_RECORD"
+  export PATH REAL_PYTHON RACE_OUTPUT_KIND RACE_HELPER_LOG RACE_SOURCE_RECORD
+  run_tool --output "$RACE_SOURCE_AUDIT_DIR" audit
+); then
+  fail 'audit accepted a replaced staging directory'
+fi
+OUT=$(cat "$TEST_TMP/out")
+ERR=$(cat "$TEST_TMP/err")
+assert_contains "$ERR" 'audit output publication conflict'
+[ ! -e "$RACE_SOURCE_AUDIT_DIR/device.txt" ] || fail 'audit published replacement staging content'
+REPLACED_SOURCE=$(cat "$RACE_SOURCE_RECORD")
+assert_contains "$(cat "$REPLACED_SOURCE/keep.txt")" 'unrelated replacement content'
+
+# Break caught: omitting the Linux no-replace implementation branch.
+LINUX_STRATEGY=$(python3 "$ROOT/scripts/atomic-rename.py" strategy linux) || fail 'Linux atomic rename strategy is unavailable'
+assert_contains "$LINUX_STRATEGY" 'linux: renameat2(RENAME_NOREPLACE)'
 
 # Break caught: preferring a cmd form that does not prove --user support.
 PM_AUDIT_DIR="$TEST_TMP/audit-pm"

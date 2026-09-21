@@ -350,12 +350,28 @@ audit_directory() {
   fi
 }
 
+retain_staging() {
+  printf 'audit staging retained for inspection: %s\n' "$1" >&2
+}
+
 publish_audit() {
   final_dir=$(audit_directory)
   [ ! -e "$final_dir" ] && [ ! -L "$final_dir" ] || { printf 'audit output already exists: %s\n' "$final_dir" >&2; return 1; }
   final_parent=$(dirname "$final_dir")
   [ -d "$final_parent" ] || { printf 'audit output parent does not exist: %s\n' "$final_parent" >&2; return 1; }
   work_dir=$(mktemp -d "$final_dir.tmp.XXXXXX") || return 1
+  if ! stage_identity=$(python3 "$script_dir/atomic-rename.py" inspect "$work_dir"); then
+    retain_staging "$work_dir"
+    return 1
+  fi
+  stage_device=${stage_identity%% *}
+  stage_inode=${stage_identity#* }
+  case "$stage_device:$stage_inode" in
+    *[!0-9:]*|*:*:*)
+      retain_staging "$work_dir"
+      return 1
+      ;;
+  esac
   if ! write_device_snapshot "$work_dir/device.txt" ||
     ! write_shell_capture "$work_dir/packages-active.txt" pm list packages ||
     ! write_shell_capture "$work_dir/packages-uninstalled.txt" pm list packages -u ||
@@ -370,11 +386,11 @@ publish_audit() {
     ! : > "$work_dir/removed-successfully.txt" ||
     ! checksum_files "$work_dir"
   then
-    rm -rf "$work_dir"
+    retain_staging "$work_dir"
     return 1
   fi
-  if ! python3 "$script_dir/atomic-rename.py" "$work_dir" "$final_dir"; then
-    rm -rf "$work_dir"
+  if ! python3 "$script_dir/atomic-rename.py" publish "$work_dir" "$final_dir" "$stage_device" "$stage_inode"; then
+    retain_staging "$work_dir"
     printf 'audit output publication conflict: %s\n' "$final_dir" >&2
     return 1
   fi
