@@ -99,6 +99,9 @@ settings_route() {
 ui_focus_for_action() {
   case "$1" in
     wolf) printf '%s\n' 'com.wolf.firelauncher/.screens.launcher.LauncherActivity' ;;
+    HudActivity) printf '%s\n' 'com.amazon.tv.launcher/.HudActivity' ;;
+    MainSettingsActivity) printf '%s\n' 'com.amazon.tv.launcher/.ui.MainSettingsActivity' ;;
+    PreferencesActivity) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity' ;;
     android.settings.SETTINGS) printf '%s\n' 'com.amazon.tv.launcher/.ui.MainSettingsActivity' ;;
     *) settings_route "$1" ;;
   esac
@@ -116,6 +119,11 @@ read_ui_state() {
 
 case "$1" in
   getprop)
+    if [ "$fake_serial" = network-check:5555 ] && [ "${2:-}" = ro.product.model ] && [ -n "${FAKE_NETWORK_MODEL:-}" ]; then
+      value=$FAKE_NETWORK_MODEL
+      printf '%s\n' "$value"
+      exit 0
+    fi
     case "${2:-}" in
       ro.product.manufacturer) value=${FAKE_MANUFACTURER:-Amazon} ;;
       ro.product.model) value=${FAKE_MODEL:-AFTMM} ;;
@@ -342,9 +350,20 @@ case "$1" in
       state=$(read_ui_state 2>/dev/null || true)
       action=${state#*:}; [ "$state" = wolf ] && action=wolf
       case "$state" in ready:*) action=${state#ready:} ;; sequence:*|protected:*) action=wrong ;; esac
+      case "$state" in
+        sequence:*:--longpress:3) action=HudActivity ;;
+        sequence:*:--longpress:3,22,22,22,22,23) action=MainSettingsActivity ;;
+      esac
       [ "$action" != "$state" ] || action=wolf
       focus=$(ui_focus_for_action "$action")
       [ -z "${FAKE_CURRENT_FOCUS:-}" ] || focus=$FAKE_CURRENT_FOCUS
+      if [ "$action" = wolf ] && [ -n "${FAKE_WOLF_FOCUS_DELAY_FILE:-}" ]; then
+        seen=0; [ -f "$FAKE_WOLF_FOCUS_DELAY_FILE" ] && seen=$(cat "$FAKE_WOLF_FOCUS_DELAY_FILE")
+        if [ "$seen" -lt "${FAKE_WOLF_FOCUS_DELAY:-0}" ]; then
+          printf '%s\n' $((seen + 1)) > "$FAKE_WOLF_FOCUS_DELAY_FILE"
+          focus='com.example/.Loading'
+        fi
+      fi
       value="mCurrentFocus=Window{0 u0 $focus}"
     else
       [ "${2:-}" = package ] && [ "${3:-}" = com.wolf.firelauncher ] || {

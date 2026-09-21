@@ -105,6 +105,13 @@ adb_shell() {
   adb_cmd shell "$@"
 }
 network_adb_cmd() { "$ADB" -s "${NETWORK_SERIAL:-$SERIAL}" "$@"; }
+network_read_prop() { network_adb_cmd shell getprop "$1"; }
+require_network_target() {
+  for pair in 'ro.product.manufacturer:Amazon' 'ro.product.model:AFTMM' 'ro.product.device:mantis' 'ro.build.id:NS6711' 'ro.build.version.incremental:0011644900484'; do
+    key=${pair%%:*}; expected=${pair#*:}; actual=$(network_read_prop "$key") || return 1
+    [ "$actual" = "$expected" ] || { printf 'network target %s expected=%s actual=%s\n' "$key" "$expected" "$actual" >&2; return 1; }
+  done
+}
 
 validate_manifests() {
   python3 -B "$SCRIPT_DIR/../tests/verify-manifests.py" "$MANIFEST_DIR"
@@ -606,12 +613,14 @@ require_wolf_ready() {
     *'Starting: Intent'*) ;;
     *) printf '%s\n' 'Wolf Launcher direct launch did not report a launch intent' >&2; return 1 ;;
   esac
-  read_shell dumpsys window windows || return 1
-  wolf_focus=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
-  case "$wolf_focus" in
-    "$WOLF_COMPONENT"|"$WOLF_PACKAGE/$WOLF_PACKAGE.${WOLF_ACTIVITY#*.}") ;;
-    *) printf 'Wolf Launcher focus expected=%s actual=%s\n' "$WOLF_COMPONENT" "$wolf_focus" >&2; return 1 ;;
-  esac
+  wolf_try=0
+  while :; do
+    read_shell dumpsys window windows || return 1
+    wolf_focus=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
+    case "$wolf_focus" in "$WOLF_COMPONENT"|"$WOLF_PACKAGE/$WOLF_PACKAGE.${WOLF_ACTIVITY#*.}") break ;; esac
+    wolf_try=$((wolf_try + 1)); [ "$wolf_try" -lt 3 ] || { printf 'Wolf Launcher focus expected=%s actual=%s\n' "$WOLF_COMPONENT" "$wolf_focus" >&2; return 1; }
+    sleep 1
+  done
 }
 
 require_settings_routes() {
@@ -668,6 +677,7 @@ verify_adb_persistence() {
     *:5555) ;;
     *) printf '%s\n' 'network serial must end in :5555' >&2; return 1 ;;
   esac
+  require_network_target || return 1
   verify_value adb_enabled 1 settings get global adb_enabled || return 1
   # Fire OS on this target legitimately reports no value for this setting.
   verify_value development_settings_enabled null settings get global development_settings_enabled || return 1
@@ -739,27 +749,31 @@ start_settings_action() {
     SETTINGS_START_STATUS=$?
   fi
 }
+settings_cleanup() {
+  adb_shell rm -f /sdcard/mantis-ui-smoke.xml >/dev/null 2>&1 || true
+  adb_shell input keyevent 4 >/dev/null 2>&1 || true
+  adb_shell input keyevent 3 >/dev/null 2>&1 || true
+}
 
 assert_settings_ui() {
   settings_action=$1
   expected_focus=$2
   tries=0
   while :; do
-    read_shell dumpsys window windows || return 1
+    read_shell dumpsys window windows || { settings_cleanup; return 1; }
     focus=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
     normalize_component() { case "$1" in */.*) p=${1%%/*}; printf '%s/%s.%s\n' "$p" "$p" "${1#*/.}" ;; *) printf '%s\n' "$1" ;; esac; }
     [ "$(normalize_component "$focus")" = "$(normalize_component "$expected_focus")" ] && break
-    tries=$((tries + 1)); [ "$tries" -lt 3 ] || { printf 'Settings focus expected=%s actual=%s action=%s\n' "$expected_focus" "$focus" "$settings_action" >&2; return 1; }
+    tries=$((tries + 1)); [ "$tries" -lt 3 ] || { printf 'Settings focus expected=%s actual=%s action=%s\n' "$expected_focus" "$focus" "$settings_action" >&2; settings_cleanup; return 1; }
     sleep 1
   done
-  read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || return 1
-  read_shell cat /sdcard/mantis-ui-smoke.xml || return 1
+  read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || { settings_cleanup; return 1; }
+  read_shell cat /sdcard/mantis-ui-smoke.xml || { settings_cleanup; return 1; }
   case "$ACTUAL" in
     *'<hierarchy'*'<node '*'</hierarchy>'*) ;;
-    *) printf 'Settings UI hierarchy was empty: %s\n' "$settings_action" >&2; return 1 ;;
+    *) printf 'Settings UI hierarchy was empty: %s\n' "$settings_action" >&2; settings_cleanup; return 1 ;;
   esac
-  adb_shell rm -f /sdcard/mantis-ui-smoke.xml >/dev/null 2>&1 || true
-  adb_shell input keyevent 4 >/dev/null 2>&1 || true
+  settings_cleanup
 }
 
 stock_menu_settings_navigation() {
@@ -767,16 +781,26 @@ stock_menu_settings_navigation() {
   # protected routes within stock UI; no shell settings launch or setting write
   # is attempted. A changed layout fails the subsequent focused-UI assertion.
   settings_action=$1
-  adb_shell input keyevent --longpress 3 >/dev/null || return 1
-  for n in 1 2 3 4; do adb_shell input keyevent 22 >/dev/null || return 1; done
-  adb_shell input keyevent 23 >/dev/null || return 1
+  settings_key() { adb_shell input keyevent "$@" >/dev/null || return 1; sleep 1; }
+  settings_focus() {
+    expected=$1
+    read_shell dumpsys window windows || return 1
+    actual=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
+    case "$actual" in *"$expected"*) return 0 ;; *) printf 'Settings intermediate focus expected=%s actual=%s\n' "$expected" "$actual" >&2; return 1 ;; esac
+  }
+  settings_key --longpress 3 || return 1
+  settings_focus HudActivity || return 1
+  for n in 1 2 3 4; do settings_key 22 || return 1; done
+  settings_key 23 || return 1
+  settings_focus MainSettingsActivity || return 1
   case "$settings_action" in
     android.settings.SETTINGS) ;;
-    android.settings.DISPLAY_SETTINGS) adb_shell input keyevent 20 >/dev/null; adb_shell input keyevent 23 >/dev/null ;;
-    android.settings.ACCESSIBILITY_SETTINGS) for n in 1 2; do adb_shell input keyevent 20 >/dev/null; done; for n in 1 2; do adb_shell input keyevent 22 >/dev/null; done; adb_shell input keyevent 23 >/dev/null ;;
+    android.settings.DISPLAY_SETTINGS) settings_key 20 || return 1; settings_key 23 || return 1 ;;
+    android.settings.ACCESSIBILITY_SETTINGS) for n in 1 2; do settings_key 20 || return 1; done; for n in 1 2; do settings_key 22 || return 1; done; settings_key 23 || return 1 ;;
     com.amazon.device.settings.action.DATE_TIME|com.amazon.device.settings.action.LANGUAGE)
-      adb_shell input keyevent 20 >/dev/null; for n in 1 2; do adb_shell input keyevent 22 >/dev/null; done; adb_shell input keyevent 23 >/dev/null
-      if [ "$settings_action" = com.amazon.device.settings.action.LANGUAGE ]; then for n in 1 2 3 4 5 6 7; do adb_shell input keyevent 20 >/dev/null; done; adb_shell input keyevent 23 >/dev/null; fi
+      settings_key 20 || return 1; for n in 1 2; do settings_key 22 || return 1; done; settings_key 23 || return 1
+      settings_focus PreferencesActivity || return 1
+      if [ "$settings_action" = com.amazon.device.settings.action.LANGUAGE ]; then for n in 1 2 3 4 5 6 7; do settings_key 20 || return 1; done; settings_key 23 || return 1; fi
       ;;
   esac
 }
@@ -840,6 +864,7 @@ capture_tun0_state() {
 
 capture_guard_baseline() {
   case "$SERIAL" in *:5555) ;; *) [ -n "$NETWORK_SERIAL" ] || { printf '%s\n' 'USB primary requires --network-serial ending in :5555' >&2; return 1; } ;; esac
+  require_network_target || return 1
   active_package_list || return 1
   require_preserved_active_packages "$ACTIVE_PACKAGES" || return 1
   require_wolf_ready || return 1

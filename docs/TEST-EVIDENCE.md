@@ -22,3 +22,9 @@ Accessibility, Display & Sounds, Preferences/Date & Time, and Language rendered
 through stock-menu D-pad navigation after the expected launcher permission
 denial. Wolf `0.1.9-Wolf` was installed and headlessly rendered, but no
 debloat/reboot acceptance is recorded here.
+
+The smoke verifier parses only the current-focus field, waits in bounded steps
+for asynchronous Launcher activity changes, and cleans its temporary hierarchy
+file before backing out to Home on every failed route. Stock-menu events are
+paced; an independent `--network-serial` is required when the primary serial is
+USB.

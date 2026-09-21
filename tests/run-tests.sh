@@ -776,6 +776,11 @@ if FAKE_NETWORK_ADB_STATE=offline "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/te
   fail 'verify accepted an offline independent network transport'
 fi
 assert_contains "$(cat "$TEST_TMP/err")" 'verify TCP 5555 is not reachable: offline'
+if FAKE_NETWORK_MODEL=AFTKA "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial usb-primary \
+  --network-serial network-check:5555 --baseline "$VERIFY_BASELINE" verify >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
+  fail 'verify accepted a wrong independent network target'
+fi
+assert_contains "$(cat "$TEST_TMP/err")" 'network target ro.product.model expected=AFTMM actual=AFTKA'
 
 # Break caught: every exact route must resolve and render, including the
 # Developer Options screen that preserves ADB Debugging access.
@@ -783,6 +788,17 @@ run_verify_settings || fail "verify-settings rejected the complete safe fixture:
 assert_contains "$OUT" 'SETTINGS_ROUTES=PASS'
 assert_contains "$OUT" 'DEVELOPER_OPTIONS=PASS'
 assert_contains "$OUT" 'VERIFY_SETTINGS=PASS'
+
+# Break caught: a stale component elsewhere in dumpsys cannot satisfy exact
+# current-focus verification, and failure must clean the UI dump and return.
+prepare_package_state
+set_wolf_ready
+if FAKE_CURRENT_FOCUS=com.example/.Wrong FAKE_UI_STATE="$TEST_TMP/ui-state" run_verify_settings; then
+  fail 'verify-settings accepted a wrong current focus'
+fi
+assert_contains "$ERR" 'Settings focus expected='
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell rm -f /sdcard/mantis-ui-smoke.xml'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent 3'
 assert_contains "$OUT" 'UI_SMOKE=PASS'
 
 # Break caught: an incomplete preserve manifest is not enough if a required
@@ -819,6 +835,18 @@ if FAKE_BLUETOOTH_ON=0 run_verify; then
   fail 'verify accepted Bluetooth disabled'
 fi
 assert_contains "$ERR" 'verify bluetooth_on expected=1 actual=0'
+prepare_package_state
+set_wolf_ready
+if FAKE_CURRENT_FOCUS=com.example/.Wrong run_verify; then
+  fail 'verify accepted a wrong Wolf current focus'
+fi
+assert_contains "$ERR" 'Wolf Launcher focus expected='
+prepare_package_state
+set_wolf_ready
+WOLF_DELAY_FILE="$TEST_TMP/wolf-focus-delay"
+rm -f "$WOLF_DELAY_FILE"
+FAKE_WOLF_FOCUS_DELAY=1 FAKE_WOLF_FOCUS_DELAY_FILE="$WOLF_DELAY_FILE" run_verify ||
+  fail "verify did not wait for delayed Wolf focus: $ERR"
 prepare_package_state
 clear_wolf_ready
 if run_verify; then
