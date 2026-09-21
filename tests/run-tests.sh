@@ -35,7 +35,7 @@ unset FAKE_AFTER_DISABLE_ADB_ENABLED FAKE_DISABLE_RESULT FAKE_AFTER_DISABLE_PERS
 unset FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT FAKE_ENABLE_FAIL_PACKAGE
 unset FAKE_ENABLE_INTERRUPT_MARKER FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE FAKE_AFTER_ENABLE_BLUETOOTH_ON
 unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
-unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
+unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PM_HELP_STATUS FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
 unset FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK FAKE_WOLF_INSTALL_LOCATION
 unset FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER FAKE_WOLF_STATE
@@ -201,7 +201,7 @@ prepare_package_state() {
   unset FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT FAKE_ENABLE_FAIL_PACKAGE
   unset FAKE_ENABLE_INTERRUPT_MARKER FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE FAKE_AFTER_ENABLE_BLUETOOTH_ON
   unset FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT
-  unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP
+  unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PM_HELP_STATUS
   unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
 }
 
@@ -400,6 +400,28 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
   run_tool --output "$PM_AUDIT_DIR" audit || fail "pm capability audit failed: $ERR"
 assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
 assert_contains "$OUT" 'PACKAGE_RESTORE=pm enable --user 0'
+PM_NONZERO_AUDIT_DIR="$TEST_TMP/audit-pm-nonzero"
+FAKE_PM_HELP_STATUS=1 \
+FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+  run_tool --output "$PM_NONZERO_AUDIT_DIR" audit || fail "nonzero pm capability audit failed: $ERR"
+assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
+assert_contains "$OUT" 'PACKAGE_RESTORE=pm enable --user 0'
+PM_NONZERO_OFFLINE_AUDIT_DIR="$TEST_TMP/audit-pm-nonzero-offline"
+FAKE_ADB_STATE=offline \
+FAKE_PM_HELP_STATUS=1 \
+FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+  run_tool --output "$PM_NONZERO_OFFLINE_AUDIT_DIR" audit || fail "offline nonzero pm audit failed: $ERR"
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
+PM_UNEXPECTED_STATUS_AUDIT_DIR="$TEST_TMP/audit-pm-unexpected-status"
+FAKE_PM_HELP_STATUS=2 \
+FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+  run_tool --output "$PM_UNEXPECTED_STATUS_AUDIT_DIR" audit || fail "unexpected-status pm audit failed: $ERR"
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
 prepare_package_state
 set_wolf_ready
 awk '
@@ -456,6 +478,20 @@ assert_contains "$OUT" 'DISABLE=com.amazon.android.marketplace RESTORE=pm enable
 assert_contains "$OUT" 'DISABLE=com.amazon.bueller.music RESTORE=pm enable --user 0 com.amazon.bueller.music'
 assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
+
+# Break caught: Fire OS returns status 1 for authoritative pm help usage. Exact
+# disable/enable syntax still permits apply after a live transport check.
+PACKAGE_NONZERO_HELP_DIR="$TEST_TMP/apply-nonzero-help"
+prepare_package_state
+set_wolf_ready
+FAKE_PM_HELP_STATUS=1 \
+FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+  run_tool --output "$PACKAGE_NONZERO_HELP_DIR" --yes apply ||
+  fail "apply rejected exact nonzero pm usage: $ERR"
+assert_contains "$OUT" 'APPLY=PASS'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'get-state'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm disable-user --user 0 com.amazon.android.marketplace'
 
 # Break caught: a compact guard that omits any preserve manifest package can remove user apps after core recovery paths are already gone.
 PACKAGE_TCOMM_GUARD_DIR="$TEST_TMP/apply-tcomm-guard"
@@ -789,6 +825,23 @@ TRAILING_PROSE_HELP_AUDIT_DIR="$TEST_TMP/audit-trailing-prose-help"
 FAKE_PM_HELP='disable-user --user USER_ID PACKAGE_OR_COMPONENT explanatory-text
 enable --user USER_ID PACKAGE_OR_COMPONENT explanatory-text' \
   run_tool --output "$TRAILING_PROSE_HELP_AUDIT_DIR" audit || fail "trailing prose help audit failed: $ERR"
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
+EMPTY_NONZERO_HELP_AUDIT_DIR="$TEST_TMP/audit-empty-nonzero-help"
+FAKE_PM_HELP_STATUS=1 FAKE_PM_HELP= \
+  run_tool --output "$EMPTY_NONZERO_HELP_AUDIT_DIR" audit || fail "empty nonzero help audit failed: $ERR"
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
+MALFORMED_NONZERO_HELP_AUDIT_DIR="$TEST_TMP/audit-malformed-nonzero-help"
+FAKE_PM_HELP_STATUS=1 FAKE_PM_HELP='disable-user and enable are available' \
+  run_tool --output "$MALFORMED_NONZERO_HELP_AUDIT_DIR" audit || fail "malformed nonzero help audit failed: $ERR"
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
+NONEXACT_NONZERO_HELP_AUDIT_DIR="$TEST_TMP/audit-nonexact-nonzero-help"
+FAKE_PM_HELP_STATUS=1 \
+FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+enable [--user USER_ID] PACKAGE_OR_COMPONENT trailing-prose' \
+  run_tool --output "$NONEXACT_NONZERO_HELP_AUDIT_DIR" audit || fail "nonexact nonzero help audit failed: $ERR"
 assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
 assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
 

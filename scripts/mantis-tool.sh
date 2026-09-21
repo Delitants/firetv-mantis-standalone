@@ -217,10 +217,25 @@ require_target() {
 
 package_state_capability() {
   PACKAGE_STATE_CAPABILITY=none
-  read_shell pm help || return 0
-  help_proves_pm_state_command "$ACTUAL" disable-user || return 0
-  help_proves_pm_state_command "$ACTUAL" enable || return 0
+  capture_package_help || return 0
+  help_proves_pm_state_command "$PACKAGE_HELP_OUTPUT" disable-user || return 0
+  help_proves_pm_state_command "$PACKAGE_HELP_OUTPUT" enable || return 0
   PACKAGE_STATE_CAPABILITY=pm-disable-enable
+}
+
+capture_package_help() {
+  PACKAGE_HELP_STATUS=0
+  PACKAGE_HELP_OUTPUT=$(adb_shell pm help 2>&1) || PACKAGE_HELP_STATUS=$?
+  strip_one_trailing_cr "$PACKAGE_HELP_OUTPUT"
+  PACKAGE_HELP_OUTPUT=$NORMALIZED
+  [ -n "$PACKAGE_HELP_OUTPUT" ] || return 1
+  [ "$PACKAGE_HELP_STATUS" -eq 0 ] && return 0
+  [ "$PACKAGE_HELP_STATUS" -eq 1 ] || return 1
+  if ! PACKAGE_HELP_TRANSPORT=$(adb_cmd get-state 2>/dev/null); then
+    return 1
+  fi
+  strip_one_trailing_cr "$PACKAGE_HELP_TRANSPORT"
+  [ "$NORMALIZED" = device ]
 }
 
 help_proves_pm_state_command() {

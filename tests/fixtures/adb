@@ -221,8 +221,13 @@ case "$1" in
   pm)
     case "${2:-}" in
       help)
-        value=${FAKE_PM_HELP:-'disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
-enable [--user USER_ID] PACKAGE_OR_COMPONENT'}
+        if [ -n "${FAKE_PM_HELP+x}" ]; then
+          value=$FAKE_PM_HELP
+        else
+          value='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+enable [--user USER_ID] PACKAGE_OR_COMPONENT'
+        fi
+        pm_help_status=${FAKE_PM_HELP_STATUS:-0}
         ;;
       list)
         [ "${3:-}" = "packages" ] || { printf 'unsupported fake pm list: %s\n' "$*" >&2; exit 64; }
@@ -422,3 +427,4 @@ versionName=$wolf_version_name"
 esac
 
 printf '%s\n' "$value"
+exit "${pm_help_status:-0}"
