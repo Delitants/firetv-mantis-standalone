@@ -9,7 +9,7 @@ and refuses operations outside that boundary.
 image procedure. It does not change locale automatically. Do not add APKs,
 backups, connection data, or credentials to this repository.
 
-Start with an audit, read the generated restore script, run `verify`, and use
+Start with an audit, read the generated restore script, run `verify --baseline AUDIT_DIRECTORY`, and use
 `verify-settings` before any package action. The latter only opens stock
 Settings routes and backs out; it never writes a setting. See
 `docs/RECOVERY.md` before using `apply` or `restore`.

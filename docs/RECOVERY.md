@@ -4,7 +4,7 @@ Before `apply`, run an audit, retain its output directory, read
 `restore-user0.sh`, and establish a tested rollback path. Then run:
 
 ```sh
-scripts/mantis-tool.sh --serial SERIAL verify
+scripts/mantis-tool.sh --serial SERIAL --baseline AUDIT_DIRECTORY verify
 scripts/mantis-tool.sh --serial SERIAL verify-settings
 ```
 
@@ -15,6 +15,11 @@ ADB Debugging, running adbd, USB ADB configuration, configured TCP 5555, and a
 reachable TCP ADB transport. It reports TCP 8009 separately from
 `NETWORK_REMOTE_OBSERVED=UNVERIFIED`; a listener alone is not proof of
 end-to-end remote input.
+
+When the primary serial is USB, supply `--network-serial SERIAL:5555` so the
+network transport is independently probed. The audit baseline records the
+persistent TCP-port property exactly; it may be empty, while the running TCP
+service still must be port 5555.
 
 `verify-settings` resolves every essential route, including Developer Options,
 then checks a focused component and non-empty hierarchy without changing a

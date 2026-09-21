@@ -15,10 +15,10 @@ OUTPUT=
 BASELINE=
 CR=$(printf '\r')
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-MANIFEST_DIR=${MANTIS_MANIFEST_DIR:-$SCRIPT_DIR/../manifests}
+MANIFEST_DIR=$SCRIPT_DIR/../manifests
 
 usage() {
-  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--output DIR] [--yes] audit|plan|apply|install-wolf|restore BACKUP_DIRECTORY|verify|verify-settings' >&2
+  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--network-serial SERIAL:5555] [--baseline AUDIT_DIRECTORY] [--output DIR] [--yes] audit|plan|apply|install-wolf|restore BACKUP_DIRECTORY|verify|verify-settings' >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -660,6 +660,14 @@ verify_tcp_8009() {
 }
 
 verify_adb_persistence() {
+  case "$SERIAL" in
+    *:5555) ;;
+    *) [ -n "$NETWORK_SERIAL" ] || { printf '%s\n' 'USB primary requires --network-serial ending in :5555' >&2; return 1; } ;;
+  esac
+  case "${NETWORK_SERIAL:-$SERIAL}" in
+    *:5555) ;;
+    *) printf '%s\n' 'network serial must end in :5555' >&2; return 1 ;;
+  esac
   verify_value adb_enabled 1 settings get global adb_enabled || return 1
   # Fire OS on this target legitimately reports no value for this setting.
   verify_value development_settings_enabled null settings get global development_settings_enabled || return 1
@@ -831,6 +839,7 @@ capture_tun0_state() {
 }
 
 capture_guard_baseline() {
+  case "$SERIAL" in *:5555) ;; *) [ -n "$NETWORK_SERIAL" ] || { printf '%s\n' 'USB primary requires --network-serial ending in :5555' >&2; return 1; } ;; esac
   active_package_list || return 1
   require_preserved_active_packages "$ACTIVE_PACKAGES" || return 1
   require_wolf_ready || return 1
@@ -860,7 +869,6 @@ capture_guard_baseline() {
   [ "$GUARD_SERVICE_ADB_TCP_PORT" = 5555 ] || { printf 'guard service.adb.tcp.port expected=5555 actual=%s\n' "$GUARD_SERVICE_ADB_TCP_PORT" >&2; return 1; }
   read_guard_value persist_adb_tcp_port getprop persist.adb.tcp.port || return 1
   GUARD_PERSIST_ADB_TCP_PORT=$GUARD_VALUE
-  [ "$GUARD_PERSIST_ADB_TCP_PORT" = 5555 ] || { printf 'guard persist.adb.tcp.port expected=5555 actual=%s\n' "$GUARD_PERSIST_ADB_TCP_PORT" >&2; return 1; }
   read_guard_value adbd pidof adbd || return 1
   GUARD_ADBD_PID=$GUARD_VALUE
   [ -n "$GUARD_ADBD_PID" ] || { printf '%s\n' 'guard adbd is not running' >&2; return 1; }

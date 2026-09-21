@@ -1,12 +1,11 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+SOURCE_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mantis-tool-tests.XXXXXX")
-TEST_MANIFEST_DIR="$TEST_TMP/manifests"
-cp -R "$ROOT/manifests" "$TEST_MANIFEST_DIR"
-export MANTIS_MANIFEST_DIR="$TEST_MANIFEST_DIR"
-MANIFEST_REMOVE="$TEST_MANIFEST_DIR/remove-user0.txt"
+ROOT="$TEST_TMP/repository"
+cp -R "$SOURCE_ROOT" "$ROOT"
+MANIFEST_REMOVE="$ROOT/manifests/remove-user0.txt"
 ORIGINAL_REMOVE=
 ORIGINAL_REMOVE="$TEST_TMP/remove-user0-original.txt"
 cp "$MANIFEST_REMOVE" "$ORIGINAL_REMOVE"

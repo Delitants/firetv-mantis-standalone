@@ -130,7 +130,7 @@ case "$1" in
       persist.sys.usb.config) value=${FAKE_PERSIST_USB_CONFIG:-mtp,adb} ;;
       sys.usb.config) value=${FAKE_SYS_USB_CONFIG:-mtp,adb} ;;
       service.adb.tcp.port) value=${FAKE_SERVICE_ADB_TCP_PORT:-5555} ;;
-      persist.adb.tcp.port) value=${FAKE_PERSIST_ADB_TCP_PORT:-5555} ;;
+      persist.adb.tcp.port) value=${FAKE_PERSIST_ADB_TCP_PORT-5555} ;;
       init.svc.adbd) value=${FAKE_INIT_SVC_ADBD:-running} ;;
       *) value= ;;
     esac
