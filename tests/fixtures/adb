@@ -74,7 +74,7 @@ package_list() {
   esac
 }
 
-settings_route() {
+settings_route_component() {
   action=$1
   if [ "${FAKE_SETTINGS_ROUTE_ACTION:-}" = "$action" ]; then
     printf '%s\n' "${FAKE_SETTINGS_ROUTE_VALUE:-}"
@@ -91,6 +91,48 @@ settings_route() {
     com.amazon.device.settings.action.DATE_TIME) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity' ;;
     com.amazon.device.settings.action.LANGUAGE) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.LanguageSelectActivity' ;;
     android.settings.APPLICATION_DEVELOPMENT_SETTINGS) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.device.DeviceActivity' ;;
+    *) return 1 ;;
+  esac
+}
+
+settings_route() {
+  action=$1
+  if [ "$action" != android.intent.action.MAIN ]; then
+    if [ -n "${FAKE_AFTER_DISABLE_SETTINGS_ROUTE_ACTION:-}" ] &&
+      [ "$FAKE_AFTER_DISABLE_SETTINGS_ROUTE_ACTION" = "$action" ] &&
+      [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
+      awk '$1 == "disabled" { found=1 } END { exit !found }' "$FAKE_PACKAGE_STATE"
+    then
+      printf '%s\n' "$FAKE_AFTER_DISABLE_SETTINGS_ROUTE_VALUE"
+      return
+    fi
+    if [ -n "${FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION:-}" ] &&
+      [ "$FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION" = "$action" ] &&
+      [ -n "${FAKE_PACKAGE_STATE:-}" ] && [ -e "$FAKE_PACKAGE_STATE.enable-occurred" ]
+    then
+      printf '%s\n' "$FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE"
+      return
+    fi
+    component=$(settings_route_component "$action") || return 1
+    if [ "${FAKE_SETTINGS_ROUTES_VERBOSE:-no}" = yes ]; then
+      case "$action" in
+        android.settings.SETTINGS)
+          metadata='priority=100 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false'
+          ;;
+        android.settings.WIFI_SETTINGS)
+          metadata='priority=100 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false'
+          ;;
+        *)
+          metadata='priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false'
+          ;;
+      esac
+      printf '%s\n%s\n' "$metadata" "$component"
+    else
+      printf '%s\n' "$component"
+    fi
+    return
+  fi
+  case "$action" in
     android.intent.action.MAIN)
       if [ -n "${FAKE_AFTER_DISABLE_HOME_RESOLVER+x}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
         awk '$1 == "disabled" { found=1 } END { exit !found }' "$FAKE_PACKAGE_STATE"
@@ -117,7 +159,7 @@ ui_focus_for_action() {
     MainSettingsActivity) printf '%s\n' 'com.amazon.tv.launcher/.ui.MainSettingsActivity' ;;
     PreferencesActivity) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity' ;;
     android.settings.SETTINGS) printf '%s\n' 'com.amazon.tv.launcher/.ui.MainSettingsActivity' ;;
-    *) settings_route "$1" ;;
+    *) settings_route_component "$1" ;;
   esac
 }
 

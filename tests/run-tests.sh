@@ -35,6 +35,8 @@ unset FAKE_AFTER_DISABLE_ADB_ENABLED FAKE_DISABLE_RESULT FAKE_AFTER_DISABLE_PERS
 unset FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT FAKE_ENABLE_FAIL_PACKAGE
 unset FAKE_ENABLE_INTERRUPT_MARKER FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE FAKE_AFTER_ENABLE_BLUETOOTH_ON
 unset FAKE_HOME_RESOLVER FAKE_HOME_RESOLVER_VERBOSE FAKE_AFTER_DISABLE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
+unset FAKE_SETTINGS_ROUTES_VERBOSE FAKE_AFTER_DISABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_DISABLE_SETTINGS_ROUTE_VALUE
+unset FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PM_HELP_STATUS FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
 unset FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK FAKE_WOLF_INSTALL_LOCATION
@@ -203,6 +205,8 @@ prepare_package_state() {
   unset FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT
   unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PM_HELP_STATUS
   unset FAKE_HOME_RESOLVER FAKE_HOME_RESOLVER_VERBOSE FAKE_AFTER_DISABLE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
+  unset FAKE_SETTINGS_ROUTES_VERBOSE FAKE_AFTER_DISABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_DISABLE_SETTINGS_ROUTE_VALUE
+  unset FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE
 }
 
 [ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 32 ] || fail 'remove-user0.txt must contain exactly 32 packages'
@@ -304,6 +308,54 @@ assert_contains "$BASELINE_CONTENT" 'service.adb.tcp.port=5555'
 assert_contains "$BASELINE_CONTENT" 'init.svc.adbd=running'
 assert_contains "$BASELINE_CONTENT" 'always_on_vpn_app=com.wireguard.android'
 assert_contains "$BASELINE_CONTENT" 'tun0=present'
+
+# Break caught: real Fire OS Settings resolvers emit strict metadata followed
+# by the component. Audit must keep raw evidence separately while the guarded,
+# checksummed route map contains exactly one parsed component per action.
+VERBOSE_SETTINGS_AUDIT_DIR="$TEST_TMP/audit-settings-verbose"
+FAKE_SETTINGS_ROUTES_VERBOSE=yes run_tool --output "$VERBOSE_SETTINGS_AUDIT_DIR" audit ||
+  fail "verbose Settings audit failed: $ERR"
+VERIFY_BASELINE=$VERBOSE_SETTINGS_AUDIT_DIR
+prepare_package_state
+set_wolf_ready
+FAKE_SETTINGS_ROUTES_VERBOSE=yes run_verify ||
+  fail "verify rejected production-shaped Settings resolvers: $ERR"
+FAKE_SETTINGS_ROUTES_VERBOSE=yes run_verify_settings ||
+  fail "verify-settings rejected production-shaped Settings resolvers: $ERR"
+assert_file "$VERBOSE_SETTINGS_AUDIT_DIR/settings-route-resolvers.raw.txt"
+assert_contains "$(cat "$VERBOSE_SETTINGS_AUDIT_DIR/settings-route-resolvers.raw.txt")" \
+  'android.settings.SETTINGS|priority=100 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false'
+assert_contains "$(cat "$VERBOSE_SETTINGS_AUDIT_DIR/settings-route-resolvers.raw.txt")" \
+  'android.settings.WIFI_SETTINGS|com.amazon.tv.settings.v2/.tv.network.NetworkActivity'
+assert_contains "$(cat "$VERBOSE_SETTINGS_AUDIT_DIR/settings-route-resolvers.txt")" \
+  'android.settings.SETTINGS=com.amazon.tv.launcher/.ui.SettingsActivity'
+assert_not_contains "$(cat "$VERBOSE_SETTINGS_AUDIT_DIR/settings-route-resolvers.txt")" 'priority='
+verify_checksums "$VERBOSE_SETTINGS_AUDIT_DIR" || fail 'verbose Settings audit checksums failed'
+VERIFY_BASELINE=$AUDIT_DIR
+
+# Break caught: resolver metadata is a closed grammar and cannot carry a
+# foreign action, prose, missing component, or multiple components.
+bad_settings_index=0
+for bad_settings_resolver in \
+  'priority=100 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false' \
+  'android.settings.SETTINGS=com.amazon.tv.launcher/.ui.SettingsActivity
+com.amazon.tv.launcher/.ui.SettingsActivity' \
+  'unparsed diagnostic prose
+com.amazon.tv.launcher/.ui.SettingsActivity' \
+  'com.amazon.tv.launcher/.ui.SettingsActivity
+com.amazon.tv.launcher/.ui.SettingsActivity'
+do
+  bad_settings_index=$((bad_settings_index + 1))
+  BAD_SETTINGS_AUDIT_DIR="$TEST_TMP/audit-settings-bad-$bad_settings_index"
+  if FAKE_SETTINGS_ROUTE_ACTION=android.settings.SETTINGS \
+    FAKE_SETTINGS_ROUTE_VALUE="$bad_settings_resolver" \
+    run_tool --output "$BAD_SETTINGS_AUDIT_DIR" audit
+  then
+    fail 'audit accepted malformed or ambiguous Settings resolver output'
+  fi
+  assert_contains "$ERR" 'Settings resolver'
+done
+unset FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE
 
 # Break caught: the live resolver is verbose and names the stock vNext HOME.
 # The exact parsed component, not a stale hard-code, is the checksummed guard.
@@ -533,13 +585,16 @@ PACKAGE_VERBOSE_HOME_DIR="$TEST_TMP/apply-home-verbose"
 prepare_package_state
 set_wolf_ready
 FAKE_HOME_RESOLVER_VERBOSE=yes \
+FAKE_SETTINGS_ROUTES_VERBOSE=yes \
   run_tool --output "$PACKAGE_VERBOSE_HOME_DIR" --yes apply ||
-  fail "apply rejected the production-shaped HOME resolver: $ERR"
+  fail "apply rejected production-shaped HOME/Settings resolvers: $ERR"
 assert_contains "$(cat "$PACKAGE_VERBOSE_HOME_DIR/verification-baseline.txt")" 'home_resolver_component=com.amazon.tv.launcher/.ui.HomeActivity_vNext'
-FAKE_HOME_RESOLVER_VERBOSE=yes run_tool restore "$PACKAGE_VERBOSE_HOME_DIR" ||
-  fail "restore rejected the production-shaped HOME resolver: $ERR"
+assert_contains "$(cat "$PACKAGE_VERBOSE_HOME_DIR/settings-route-resolvers.txt")" 'android.settings.WIFI_SETTINGS=com.amazon.tv.settings.v2/.tv.network.NetworkActivity'
+FAKE_HOME_RESOLVER_VERBOSE=yes FAKE_SETTINGS_ROUTES_VERBOSE=yes \
+  run_tool restore "$PACKAGE_VERBOSE_HOME_DIR" ||
+  fail "restore rejected production-shaped HOME/Settings resolvers: $ERR"
 assert_contains "$OUT" 'RESTORE=PASS'
-unset FAKE_HOME_RESOLVER_VERBOSE
+unset FAKE_HOME_RESOLVER_VERBOSE FAKE_SETTINGS_ROUTES_VERBOSE
 
 # Break caught: Fire OS returns status 1 for authoritative pm help usage. Exact
 # disable/enable syntax still permits apply after a live transport check.
@@ -591,6 +646,36 @@ FAKE_AFTER_DISABLE_HOME_RESOLVER=com.amazon.tv.launcher/.ui.HomeActivity_vNext \
 assert_contains "$ERR" 'guard HOME resolver expected=com.amazon.tv.launcher/.HomeActivity actual=com.amazon.tv.launcher/.ui.HomeActivity_vNext'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
 verify_checksums "$PACKAGE_HOME_DRIFT_DIR" || fail 'HOME drift rollback left stale checksums'
+
+# Break caught: Settings-route identity must be checked from the parsed audit
+# baseline after every disable, and a mismatch must trigger inverse enable.
+PACKAGE_SETTINGS_DRIFT_DIR="$TEST_TMP/apply-settings-drift"
+prepare_package_state
+set_wolf_ready
+FAKE_AFTER_DISABLE_SETTINGS_ROUTE_ACTION=android.settings.WIFI_SETTINGS \
+FAKE_AFTER_DISABLE_SETTINGS_ROUTE_VALUE=com.example.settings/.WifiActivity \
+  run_tool --output "$PACKAGE_SETTINGS_DRIFT_DIR" --yes apply &&
+  fail 'apply accepted Settings route drift after disable'
+assert_contains "$ERR" 'Settings resolver changed from baseline expected=com.amazon.tv.settings.v2/.tv.network.NetworkActivity actual=com.example.settings/.WifiActivity action=android.settings.WIFI_SETTINGS'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
+verify_checksums "$PACKAGE_SETTINGS_DRIFT_DIR" || fail 'Settings drift rollback left stale checksums'
+
+# Break caught: rollback cannot claim recovery when the Settings route remains
+# changed after the inverse enable; the checksummed recovery ledger must stay.
+PACKAGE_SETTINGS_ROLLBACK_DRIFT_DIR="$TEST_TMP/apply-settings-rollback-drift"
+prepare_package_state
+set_wolf_ready
+FAKE_AFTER_DISABLE_SETTINGS_ROUTE_ACTION=android.settings.WIFI_SETTINGS \
+FAKE_AFTER_DISABLE_SETTINGS_ROUTE_VALUE=com.example.settings/.DisabledWifiActivity \
+FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION=android.settings.WIFI_SETTINGS \
+FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE=com.example.settings/.EnabledWifiActivity \
+  run_tool --output "$PACKAGE_SETTINGS_ROLLBACK_DRIFT_DIR" --yes apply &&
+  fail 'apply accepted Settings drift through rollback'
+assert_contains "$ERR" 'rollback incomplete'
+assert_contains "$ERR" "$PACKAGE_SETTINGS_ROLLBACK_DRIFT_DIR"
+assert_not_contains "$ERR" 'restored'
+assert_contains "$(cat "$PACKAGE_SETTINGS_ROLLBACK_DRIFT_DIR/disabled-successfully.txt")" 'com.amazon.android.marketplace'
+verify_checksums "$PACKAGE_SETTINGS_ROLLBACK_DRIFT_DIR" || fail 'Settings rollback drift left stale checksums'
 
 # Break caught: accepting a successful command that leaves a package enabled.
 PACKAGE_STILL_ACTIVE_DIR="$TEST_TMP/apply-still-active"
@@ -762,6 +847,24 @@ awk '
   END { exit !(enabled && bluetooth && enabled < bluetooth) }
 ' "$FAKE_ADB_LOG" || fail 'restore did not run Bluetooth guard after enable'
 verify_checksums "$PACKAGE_RESTORE_GUARD_DIR" || fail 'restore guard failure left stale checksums'
+
+# Break caught: fresh restore must load the checksummed parsed route baseline
+# and retain its ledger when a route changes immediately after pm enable.
+PACKAGE_RESTORE_SETTINGS_GUARD_DIR="$TEST_TMP/restore-settings-guard"
+prepare_package_state
+set_wolf_ready
+run_tool --output "$PACKAGE_RESTORE_SETTINGS_GUARD_DIR" --yes apply ||
+  fail "apply failed for Settings restore-guard test: $ERR"
+if FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION=android.settings.WIFI_SETTINGS \
+  FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE=com.example.settings/.WifiActivity \
+  run_tool restore "$PACKAGE_RESTORE_SETTINGS_GUARD_DIR"
+then
+  fail 'restore accepted Settings route drift after enable'
+fi
+assert_contains "$ERR" 'Settings resolver changed from baseline expected=com.amazon.tv.settings.v2/.tv.network.NetworkActivity actual=com.example.settings/.WifiActivity action=android.settings.WIFI_SETTINGS'
+assert_contains "$(cat "$PACKAGE_RESTORE_SETTINGS_GUARD_DIR/restore-journal.txt")" 'guard-failure com.amazon.bueller.music'
+assert_contains "$(cat "$PACKAGE_RESTORE_SETTINGS_GUARD_DIR/disabled-successfully.txt")" 'com.amazon.bueller.music'
+verify_checksums "$PACKAGE_RESTORE_SETTINGS_GUARD_DIR" || fail 'Settings restore guard failure left stale checksums'
 
 # Break caught: restore must parse only trusted journal files rather than execute a supplied script, even if an attacker recomputes checksums.
 PACKAGE_TRUST_DIR="$TEST_TMP/apply-restore-trust"
@@ -1204,7 +1307,7 @@ if FAKE_SETTINGS_ROUTE_ACTION=android.settings.WIFI_SETTINGS \
   FAKE_SETTINGS_ROUTE_VALUE=com.example.settings/.WifiActivity run_verify; then
   fail 'verify accepted an unexpected Wi-Fi Settings resolver'
 fi
-assert_contains "$ERR" 'Settings resolver expected=com.amazon.tv.settings.v2/.tv.network.NetworkActivity'
+assert_contains "$ERR" 'Settings resolver changed from baseline expected=com.amazon.tv.settings.v2/.tv.network.NetworkActivity actual=com.example.settings/.WifiActivity action=android.settings.WIFI_SETTINGS'
 
 # Break caught: a route can resolve while its UI no longer renders. This is
 # particularly important for Developer Options and the permission-protected

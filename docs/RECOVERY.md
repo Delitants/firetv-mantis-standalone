@@ -21,6 +21,13 @@ network transport is independently probed. The audit baseline records the
 persistent TCP-port property exactly; it may be empty, while the running TCP
 service still must be port 5555.
 
+`settings-route-resolvers.raw.txt` preserves each resolver output line with its
+action prefix. `settings-route-resolvers.txt` is the strict parsed baseline: it
+contains exactly one stock component for each of the ten required actions.
+Diagnostic metadata is accepted only in the known Fire OS grammar. Verify,
+apply, rollback, and fresh restore reject missing, duplicated, malformed,
+foreign, or changed route components.
+
 `verify-settings` resolves every essential route, including Developer Options,
 then checks a focused component and non-empty hierarchy without changing a
 setting. Accessibility, Display & Sounds, Date & Time, and Language are

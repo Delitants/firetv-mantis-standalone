@@ -9,7 +9,7 @@ APKs, backups, or VPN material.
 | `PACKAGE_OPERATION=pm disable-user --user 0` | Help-proven reversible per-user disable mode. |
 | `PACKAGE_RESTORE=pm enable --user 0` | Help-proven inverse used only for recorded successful disables. |
 | `VERIFY_GATE=PASS` | Exact target and preservation checks passed. |
-| `SETTINGS_ROUTES=PASS` | Every action resolved to the pinned stock component. |
+| `SETTINGS_ROUTES=PASS` | Every action produced one strictly parsed stock component matching the checksummed ten-route baseline. |
 | `ADB_PERSISTENCE=PASS` | ADB Debugging, null Developer Options baseline, adbd, USB configuration, TCP port, and TCP transport passed. |
 | `TCP8009=PASS` | A listener was observed. This is not remote-control proof. |
 | `NETWORK_REMOTE_OBSERVED=UNVERIFIED` | No non-ADB remote UI movement was captured. |
@@ -37,6 +37,12 @@ full suite is exercised with the local default `sh` and `/bin/dash`. Generated
 recovery is tested as a resumable controller entry point, including checksum and
 mode binding, manifest membership, disabled-before/enabled-after state, and
 idempotent completion after the ledger is empty.
+
+Resolver tests cover legacy one-line output and production-shaped Fire OS
+metadata plus component output. Raw Settings resolver evidence is kept separate
+from the parsed baseline. Missing, ambiguous, malformed, foreign-action, and
+foreign-component output is rejected, and Settings route drift is exercised
+after disable, after rollback enable, and during fresh restore.
 
 The smoke verifier parses only the current-focus field, waits in bounded steps
 for asynchronous Launcher activity changes, and cleans its temporary hierarchy

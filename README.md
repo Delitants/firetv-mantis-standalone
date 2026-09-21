@@ -14,6 +14,11 @@ Start with an audit, read the generated restore script, run `--baseline AUDIT_DI
 Settings routes and backs out; it never writes a setting. See
 `docs/RECOVERY.md` before using `apply` or `restore`.
 
+Fire OS may print a diagnostic metadata line before a resolved component.
+Audit preserves those raw Settings resolver lines separately and stores a
+strictly parsed, checksummed ten-route component map. Package guards and fresh
+restore load that map and require every route to remain exactly baseline-bound.
+
 The project is English and locale-neutral. A stock Language-screen selection is
 optional and manual; the observed target did not offer Ukrainian and records
 `UKRAINIAN_LOCALE=UNAVAILABLE`.

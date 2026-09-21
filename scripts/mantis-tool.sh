@@ -305,18 +305,10 @@ write_device_snapshot() {
   printf 'uid=%s\n' "$ACTUAL" >> "$audit_file"
 }
 
-write_settings_route_resolvers() {
-  audit_file=$1
-  : > "$audit_file"
-  settings_route_lines | while IFS='|' read -r action expected_component expected_focus route_kind; do
-    read_shell cmd package resolve-activity --brief -a "$action" || return 1
-    printf '%s=%s\n' "$action" "$ACTUAL" >> "$audit_file"
-  done
-}
-
-parse_home_resolver_output() {
-  home_resolver_output=$1
-  if ! HOME_RESOLVER_COMPONENT=$(printf '%s\n' "$home_resolver_output" | awk '
+parse_resolver_output() {
+  resolver_label=$1
+  resolver_output=$2
+  if ! RESOLVER_COMPONENT=$(printf '%s\n' "$resolver_output" | awk '
     function valid_package(value) {
       return value ~ /^[A-Za-z0-9_$]+([.][A-Za-z0-9_$]+)+$/
     }
@@ -339,14 +331,48 @@ parse_home_resolver_output() {
       print component
     }
   '); then
-    printf 'guard HOME resolver output is invalid: %s\n' "$home_resolver_output" >&2
+    printf 'guard %s resolver output is invalid: %s\n' "$resolver_label" "$resolver_output" >&2
     return 1
   fi
+}
+
+parse_home_resolver_output() {
+  home_resolver_output=$1
+  parse_resolver_output HOME "$home_resolver_output" || return 1
+  HOME_RESOLVER_COMPONENT=$RESOLVER_COMPONENT
   home_resolver_package=${HOME_RESOLVER_COMPONENT%%/*}
   [ "$home_resolver_package" = com.amazon.tv.launcher ] || {
     printf 'guard HOME resolver package expected=com.amazon.tv.launcher actual=%s\n' "$home_resolver_package" >&2
     return 1
   }
+}
+
+write_prefixed_resolver_raw() {
+  resolver_action=$1
+  resolver_output=$2
+  resolver_raw_file=$3
+  printf '%s\n' "$resolver_output" | while IFS= read -r resolver_line; do
+    printf '%s|%s\n' "$resolver_action" "$resolver_line"
+  done >> "$resolver_raw_file"
+}
+
+write_settings_route_resolvers() {
+  parsed_file=$1
+  raw_file=$2
+  : > "$parsed_file"
+  : > "$raw_file"
+  settings_route_lines | while IFS='|' read -r action expected_component expected_focus route_kind; do
+    read_shell cmd package resolve-activity --brief -a "$action" || exit 1
+    resolver_raw=$ACTUAL
+    write_prefixed_resolver_raw "$action" "$resolver_raw" "$raw_file" || exit 1
+    parse_resolver_output Settings "$resolver_raw" || exit 1
+    [ "$RESOLVER_COMPONENT" = "$expected_component" ] || {
+      printf 'Settings resolver expected=%s actual=%s action=%s\n' \
+        "$expected_component" "$RESOLVER_COMPONENT" "$action" >&2
+      exit 1
+    }
+    printf '%s=%s\n' "$action" "$RESOLVER_COMPONENT" >> "$parsed_file" || exit 1
+  done
 }
 
 capture_home_resolver() {
@@ -504,7 +530,8 @@ publish_audit() {
     ! write_tun0_capture "$work_dir/tun0.txt" ||
     ! write_home_resolver_capture "$work_dir/home-resolver.txt" ||
     ! write_verification_baseline "$work_dir/verification-baseline.txt" ||
-    ! write_settings_route_resolvers "$work_dir/settings-route-resolvers.txt" ||
+    ! write_settings_route_resolvers "$work_dir/settings-route-resolvers.txt" \
+      "$work_dir/settings-route-resolvers.raw.txt" ||
     ! printf 'PACKAGE_OPERATION=%s\nPACKAGE_RESTORE=%s\n' \
       "${PACKAGE_OPERATION:-unsupported}" "${PACKAGE_RESTORE:-unsupported}" > "$work_dir/package-mode.txt" ||
     ! write_restore_script "$work_dir/restore-user0.sh" "$PACKAGE_STATE_CAPABILITY" ||
@@ -512,6 +539,12 @@ publish_audit() {
     ! : > "$work_dir/operation-journal.txt" ||
     ! : > "$work_dir/restore-journal.txt" ||
     ! checksum_files "$work_dir"
+  then
+    retain_staging "$work_dir"
+    return 1
+  fi
+  if ! GUARD_SETTINGS_ROUTE_BASELINE=$(cat "$work_dir/settings-route-resolvers.txt") ||
+    ! validate_settings_route_baseline_text "$GUARD_SETTINGS_ROUTE_BASELINE"
   then
     retain_staging "$work_dir"
     return 1
@@ -683,11 +716,62 @@ require_wolf_ready() {
   done
 }
 
+read_settings_route_baseline_value() {
+  route_baseline_text=$1
+  route_baseline_action=$2
+  if ! SETTINGS_ROUTE_BASELINE_VALUE=$(printf '%s\n' "$route_baseline_text" | awk -F= -v action="$route_baseline_action" '
+    $1 == action { count++; sub(/^[^=]*=/, ""); value = $0 }
+    END { if (count != 1) exit 1; printf "%s", value }
+  '); then
+    printf 'Settings resolver baseline action is missing or duplicated: %s\n' "$route_baseline_action" >&2
+    return 1
+  fi
+}
+
+validate_settings_route_baseline_text() {
+  route_baseline_text=$1
+  route_baseline_count=$(printf '%s\n' "$route_baseline_text" | awk 'NF { count++ } END { print count + 0 }')
+  [ "$route_baseline_count" = 10 ] || {
+    printf 'Settings resolver baseline expected=10 routes actual=%s\n' "$route_baseline_count" >&2
+    return 1
+  }
+  settings_route_lines | while IFS='|' read -r settings_action expected_component expected_focus route_kind; do
+    read_settings_route_baseline_value "$route_baseline_text" "$settings_action" || exit 1
+    parse_resolver_output Settings "$SETTINGS_ROUTE_BASELINE_VALUE" || exit 1
+    [ "$RESOLVER_COMPONENT" = "$expected_component" ] || {
+      printf 'Settings resolver baseline expected=%s actual=%s action=%s\n' \
+        "$expected_component" "$RESOLVER_COMPONENT" "$settings_action" >&2
+      exit 1
+    }
+  done
+}
+
+load_settings_route_baseline() {
+  route_baseline_dir=$1
+  route_baseline_file=$route_baseline_dir/settings-route-resolvers.txt
+  [ -f "$route_baseline_file" ] && [ ! -L "$route_baseline_file" ] || {
+    printf '%s\n' 'Settings resolver baseline is missing' >&2
+    return 1
+  }
+  GUARD_SETTINGS_ROUTE_BASELINE=$(cat "$route_baseline_file") || return 1
+  validate_settings_route_baseline_text "$GUARD_SETTINGS_ROUTE_BASELINE"
+}
+
 require_settings_routes() {
   settings_route_lines | while IFS='|' read -r settings_action expected_component expected_focus route_kind; do
     read_shell cmd package resolve-activity --brief -a "$settings_action" || { settings_cleanup; exit 1; }
-    [ "$ACTUAL" = "$expected_component" ] || {
-      printf 'Settings resolver expected=%s actual=%s action=%s\n' "$expected_component" "$ACTUAL" "$settings_action" >&2
+    resolver_raw=$ACTUAL
+    parse_resolver_output Settings "$resolver_raw" || exit 1
+    if [ -n "${GUARD_SETTINGS_ROUTE_BASELINE+x}" ]; then
+      read_settings_route_baseline_value "$GUARD_SETTINGS_ROUTE_BASELINE" "$settings_action" || exit 1
+      [ "$RESOLVER_COMPONENT" = "$SETTINGS_ROUTE_BASELINE_VALUE" ] || {
+        printf 'Settings resolver changed from baseline expected=%s actual=%s action=%s\n' \
+          "$SETTINGS_ROUTE_BASELINE_VALUE" "$RESOLVER_COMPONENT" "$settings_action" >&2
+        exit 1
+      }
+    fi
+    [ "$RESOLVER_COMPONENT" = "$expected_component" ] || {
+      printf 'Settings resolver expected=%s actual=%s action=%s\n' "$expected_component" "$RESOLVER_COMPONENT" "$settings_action" >&2
       exit 1
     }
   done
@@ -783,6 +867,7 @@ verify_vpn_and_locale() {
   read_baseline_value "$baseline_file" home_resolver_component || return 1
   parse_home_resolver_output "$BASELINE_VALUE" || return 1
   GUARD_HOME_RESOLVER_COMPONENT=$HOME_RESOLVER_COMPONENT
+  load_settings_route_baseline "$BASELINE" || return 1
 }
 
 verify() {
@@ -873,8 +958,10 @@ verify_settings() {
   require_target
   settings_route_lines | while IFS='|' read -r settings_action expected_component expected_focus route_kind; do
     read_shell cmd package resolve-activity --brief -a "$settings_action" || { settings_cleanup; exit 1; }
-    [ "$ACTUAL" = "$expected_component" ] || {
-      printf 'Settings resolver expected=%s actual=%s action=%s\n' "$expected_component" "$ACTUAL" "$settings_action" >&2
+    resolver_raw=$ACTUAL
+    parse_resolver_output Settings "$resolver_raw" || { settings_cleanup; exit 1; }
+    [ "$RESOLVER_COMPONENT" = "$expected_component" ] || {
+      printf 'Settings resolver expected=%s actual=%s action=%s\n' "$expected_component" "$RESOLVER_COMPONENT" "$settings_action" >&2
       settings_cleanup; return 1
     }
     start_settings_action "$settings_action"
@@ -1021,6 +1108,7 @@ load_guard_baseline() {
   read_baseline_value "$baseline_file" home_resolver_component || return 1
   parse_home_resolver_output "$BASELINE_VALUE" || return 1
   GUARD_HOME_RESOLVER_COMPONENT=$HOME_RESOLVER_COMPONENT
+  load_settings_route_baseline "$baseline_dir" || return 1
   [ "$GUARD_BLUETOOTH_ON" = 1 ] || return 1
   [ "$GUARD_ADB_ENABLED" = 1 ] || return 1
   require_usb_adb "$GUARD_PERSIST_USB_CONFIG" || return 1
