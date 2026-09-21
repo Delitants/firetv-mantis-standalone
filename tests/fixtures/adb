@@ -153,8 +153,13 @@ package:com.example.removed'} ;;
       wolf_version_code=${FAKE_WOLF_INSTALLED_VERSION_CODE:-11723945}
       wolf_version_name=${FAKE_WOLF_INSTALLED_VERSION_NAME:-0.1.7-FireTV}
     fi
-    value="versionCode=$wolf_version_code minSdk=21 targetSdk=29
+    if [ "${FAKE_WOLF_DUMPSYS_INDENT:-no}" = yes ]; then
+      value="    versionCode=$wolf_version_code minSdk=21 targetSdk=29
+    versionName=$wolf_version_name"
+    else
+      value="versionCode=$wolf_version_code minSdk=21 targetSdk=29
 versionName=$wolf_version_name"
+    fi
     ;;
   am)
     [ "${2:-}" = start ] && [ "${3:-}" = -n ] && [ "${4:-}" = com.wolf.firelauncher/.screens.launcher.LauncherActivity ] || {

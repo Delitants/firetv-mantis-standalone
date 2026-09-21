@@ -28,7 +28,7 @@ unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNIN
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
 unset FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK FAKE_WOLF_INSTALL_LOCATION
 unset FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER FAKE_WOLF_STATE
-unset FAKE_WOLF_CURL_LOG
+unset FAKE_WOLF_CURL_LOG FAKE_WOLF_DUMPSYS_INDENT
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -71,10 +71,12 @@ run_wolf() {
   export FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_HASH FAKE_WOLF_PACKAGE
   export FAKE_WOLF_VERSION_CODE FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK
   export FAKE_WOLF_INSTALL_LOCATION FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER
-  export FAKE_WOLF_STATE FAKE_WOLF_CURL_LOG
+  export FAKE_WOLF_STATE FAKE_WOLF_CURL_LOG FAKE_WOLF_DUMPSYS_INDENT
   : > "$FAKE_ADB_LOG"
-  if PATH="$ROOT/tests/fixtures:$PATH" "$ROOT/scripts/mantis-tool.sh" \
-    --adb "$ROOT/tests/fixtures/adb" --serial test-serial --yes install-wolf >"$TEST_TMP/out" 2>"$TEST_TMP/err"
+  if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" \
+    --curl "$ROOT/tests/fixtures/curl" --aapt "$ROOT/tests/fixtures/aapt" \
+    --apksigner "$ROOT/tests/fixtures/apksigner" --sha256 "$ROOT/tests/fixtures/wolf-sha256" \
+    --serial test-serial --yes install-wolf >"$TEST_TMP/out" 2>"$TEST_TMP/err"
   then
     STATUS=0
   else
@@ -89,7 +91,7 @@ reset_wolf_fixture() {
   unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_HASH FAKE_WOLF_PACKAGE
   unset FAKE_WOLF_VERSION_CODE FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK
   unset FAKE_WOLF_INSTALL_LOCATION FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER
-  unset FAKE_WOLF_STATE FAKE_WOLF_CURL_LOG
+  unset FAKE_WOLF_STATE FAKE_WOLF_CURL_LOG FAKE_WOLF_DUMPSYS_INDENT
 }
 
 assert_wolf_not_installed() {
@@ -120,6 +122,17 @@ assert_contains "$(cat "$FAKE_ADB_LOG")" 'install -r '
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell dumpsys package com.wolf.firelauncher'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -n com.wolf.firelauncher/.screens.launcher.LauncherActivity'
 [ "$(cat "$WOLF_POSITIVE_STATE")" = '11900120 0.1.9-Wolf' ] || fail 'Wolf positive fixture did not update installed identity'
+assert_wolf_download_removed
+
+# Break caught: rejecting an installed Wolf version because dumpsys indents its fields.
+WOLF_INDENTED_STATE="$TEST_TMP/wolf-indented-state"
+printf '%s\n' '11723945 0.1.7-FireTV' > "$WOLF_INDENTED_STATE"
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-indented.log" FAKE_WOLF_STATE="$WOLF_INDENTED_STATE" \
+FAKE_WOLF_DUMPSYS_INDENT=yes run_wolf || fail "Wolf indented dumpsys fixture failed: $ERR"
+assert_contains "$OUT" 'WOLF_INSTALLED_VERSION_CODE=11900120'
+assert_contains "$OUT" 'WOLF_INSTALLED_VERSION_NAME=0.1.9-Wolf'
+assert_contains "$OUT" 'WOLF_DIRECT_LAUNCH=PASS'
 assert_wolf_download_removed
 
 run_tool --output "$TEST_TMP/audit-initial" audit || true

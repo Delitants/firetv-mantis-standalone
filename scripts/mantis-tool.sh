@@ -5,6 +5,7 @@ ADB=adb
 CURL=curl
 AAPT=aapt
 APKSIGNER=apksigner
+SHA256_TOOL=
 SERIAL=
 YES=no
 COMMAND=
@@ -12,7 +13,7 @@ OUTPUT=
 CR=$(printf '\r')
 
 usage() {
-  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] --serial SERIAL [--output DIR] [--yes] audit|apply|install-wolf' >&2
+  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--output DIR] [--yes] audit|apply|install-wolf' >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -35,6 +36,11 @@ while [ "$#" -gt 0 ]; do
     --apksigner)
       [ "$#" -ge 2 ] || { usage; exit 64; }
       APKSIGNER=$2
+      shift 2
+      ;;
+    --sha256)
+      [ "$#" -ge 2 ] || { usage; exit 64; }
+      SHA256_TOOL=$2
       shift 2
       ;;
     --serial)
@@ -464,7 +470,7 @@ wolf_badging_value() {
 wolf_print_installed_identity() {
   wolf_package_dump=$1
   WOLF_INSTALLED_VERSION_CODE=$(printf '%s\n' "$wolf_package_dump" | sed -n 's/.*versionCode=\([0-9][0-9]*\).*/\1/p' | head -n 1)
-  WOLF_INSTALLED_VERSION_NAME=$(printf '%s\n' "$wolf_package_dump" | sed -n 's/^versionName=\(.*\)$/\1/p' | head -n 1)
+  WOLF_INSTALLED_VERSION_NAME=$(printf '%s\n' "$wolf_package_dump" | sed -n 's/^[[:space:]]*versionName=\(.*\)$/\1/p' | head -n 1)
 }
 
 install_wolf() {
@@ -479,7 +485,9 @@ install_wolf() {
   "$CURL" --fail --location --output "$wolf_apk" "$WOLF_URL" || wolf_fail 'download failed'
   wolf_bytes=$(wc -c < "$wolf_apk" | tr -d '[:space:]')
   [ "$wolf_bytes" = "$WOLF_SIZE" ] || wolf_fail "byte count expected=$WOLF_SIZE actual=$wolf_bytes"
-  if command -v sha256sum >/dev/null 2>&1; then
+  if [ -n "$SHA256_TOOL" ]; then
+    wolf_hash=$("$SHA256_TOOL" "$wolf_apk" | awk '{print $1}')
+  elif command -v sha256sum >/dev/null 2>&1; then
     wolf_hash=$(sha256sum "$wolf_apk" | awk '{print $1}')
   else
     wolf_hash=$(shasum -a 256 "$wolf_apk" | awk '{print $1}')

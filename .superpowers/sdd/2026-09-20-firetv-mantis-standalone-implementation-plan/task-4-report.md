@@ -60,3 +60,45 @@ authenticity or malware safety.
 This is fixture-only verification by design. The real archived APK, real tools,
 and a live `mantis/AFTMM` target were intentionally not contacted in this task;
 publisher authenticity and malware safety remain outside these pins.
+
+## Fix round 1 — indented `dumpsys` readback
+
+### RED evidence
+
+After adding the indented package-dump fixture and its focused regression,
+`sh tests/run-tests.sh` exited `1` with:
+
+```text
+FAIL: Wolf indented dumpsys fixture failed: Wolf verification failed: installed version name expected=0.1.9-Wolf actual=
+```
+
+This demonstrated that the previous `^versionName=` parser did not handle the
+normal leading indentation in `dumpsys package` output.
+
+### GREEN evidence
+
+The focused offline command, with `FAKE_WOLF_DUMPSYS_INDENT=yes`, completed
+`0` and printed:
+
+```text
+WOLF_INSTALLED_VERSION_NAME=0.1.9-Wolf
+WOLF_DIRECT_LAUNCH=PASS
+```
+
+It also asserted the final `11900120 0.1.9-Wolf` fixture state and deletion of
+the temporary APK. The full command `sh tests/run-tests.sh` completed `0` in
+23.0 seconds. Its final output included the seven atomic-rename tests as `OK`
+and `PASS: target gate tests`.
+
+### Self-review
+
+- `versionName` now accepts leading POSIX whitespace while retaining exact
+  value comparison after installation; version-code parsing already accepted
+  indentation.
+- The adb fixture now models both indented and legacy-unindented package dumps,
+  and the regression covers the indented pre- and post-install readbacks.
+- Wolf hash doubles are passed by an explicit `--sha256` test-only command
+  path, rather than leaking a generic hash binary through `PATH` into the
+  audit checksum test.
+- No APK was added, and no target, manifest, audit, or rollback behavior was
+  modified.
