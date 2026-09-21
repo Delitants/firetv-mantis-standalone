@@ -25,6 +25,10 @@ unset FAKE_MANUFACTURER FAKE_MODEL FAKE_DEVICE FAKE_BUILD_ID FAKE_INCREMENTAL
 unset FAKE_RELEASE FAKE_SDK FAKE_ABI FAKE_UNAME FAKE_ENFORCE FAKE_UID
 unset FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES FAKE_HOME FAKE_BLUETOOTH_ON FAKE_TUN0
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
+unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
+unset FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK FAKE_WOLF_INSTALL_LOCATION
+unset FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER FAKE_WOLF_STATE
+unset FAKE_WOLF_CURL_LOG
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -62,6 +66,61 @@ run_tool() {
   ERR=$(cat "$TEST_TMP/err")
   return "$STATUS"
 }
+
+run_wolf() {
+  export FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_HASH FAKE_WOLF_PACKAGE
+  export FAKE_WOLF_VERSION_CODE FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK
+  export FAKE_WOLF_INSTALL_LOCATION FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER
+  export FAKE_WOLF_STATE FAKE_WOLF_CURL_LOG
+  : > "$FAKE_ADB_LOG"
+  if PATH="$ROOT/tests/fixtures:$PATH" "$ROOT/scripts/mantis-tool.sh" \
+    --adb "$ROOT/tests/fixtures/adb" --serial test-serial --yes install-wolf >"$TEST_TMP/out" 2>"$TEST_TMP/err"
+  then
+    STATUS=0
+  else
+    STATUS=$?
+  fi
+  OUT=$(cat "$TEST_TMP/out")
+  ERR=$(cat "$TEST_TMP/err")
+  return "$STATUS"
+}
+
+reset_wolf_fixture() {
+  unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_HASH FAKE_WOLF_PACKAGE
+  unset FAKE_WOLF_VERSION_CODE FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK
+  unset FAKE_WOLF_INSTALL_LOCATION FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER
+  unset FAKE_WOLF_STATE FAKE_WOLF_CURL_LOG
+}
+
+assert_wolf_not_installed() {
+  WOLF_ADB_LOG=$(cat "$FAKE_ADB_LOG")
+  case "$WOLF_ADB_LOG" in
+    *'install -r '*|*'uninstall '*|*'clear'*) fail "Wolf rejection modified a launcher: $WOLF_ADB_LOG" ;;
+  esac
+}
+
+assert_wolf_download_removed() {
+  wolf_download=$(sed -n 's/^output=//p' "$FAKE_WOLF_CURL_LOG")
+  [ -n "$wolf_download" ] || fail 'Wolf curl fixture did not record an output path'
+  [ ! -e "$wolf_download" ] || fail "Wolf temporary APK remained at $wolf_download"
+}
+
+# Break caught: reporting success without a pinned install, exact readback, and direct launch.
+WOLF_POSITIVE_STATE="$TEST_TMP/wolf-positive-state"
+printf '%s\n' '11723945 0.1.7-FireTV' > "$WOLF_POSITIVE_STATE"
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-positive.log" FAKE_WOLF_STATE="$WOLF_POSITIVE_STATE" run_wolf ||
+  fail "Wolf positive fixture failed: $ERR"
+assert_contains "$OUT" 'WOLF_VERIFY=PASS'
+assert_contains "$OUT" 'WOLF_INSTALL=PASS'
+assert_contains "$OUT" 'WOLF_INSTALLED_VERSION_CODE=11900120'
+assert_contains "$OUT" 'WOLF_INSTALLED_VERSION_NAME=0.1.9-Wolf'
+assert_contains "$OUT" 'WOLF_DIRECT_LAUNCH=PASS'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'install -r '
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell dumpsys package com.wolf.firelauncher'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -n com.wolf.firelauncher/.screens.launcher.LauncherActivity'
+[ "$(cat "$WOLF_POSITIVE_STATE")" = '11900120 0.1.9-Wolf' ] || fail 'Wolf positive fixture did not update installed identity'
+assert_wolf_download_removed
 
 run_tool --output "$TEST_TMP/audit-initial" audit || true
 [ "$STATUS" -eq 0 ] || fail "audit failed for exact target: $ERR"
@@ -276,6 +335,103 @@ case "$OUT" in
   *'No mutation is implemented.'*) fail 'apply reached its action after manifest rejection' ;;
 esac
 restore_manifest
+
+# Break caught: accepting a fetch from a different Wolf artifact URL.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-url.log" \
+FAKE_WOLF_CURL_EXPECTED_URL='https://example.invalid/WolfLauncher.apk' \
+  run_wolf && fail 'Wolf accepted a different download URL'
+assert_wolf_not_installed
+
+# Break caught: trusting an artifact whose byte length differs from the pin.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-size.log" FAKE_WOLF_SIZE=3272500 \
+  run_wolf && fail 'Wolf accepted a different byte count'
+assert_wolf_not_installed
+assert_wolf_download_removed
+
+# Break caught: trusting artifact bytes that do not match the pinned SHA-256.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-hash.log" FAKE_WOLF_HASH=00 \
+  run_wolf && fail 'Wolf accepted a different APK hash'
+assert_wolf_not_installed
+assert_wolf_download_removed
+
+# Break caught: installing an APK with a different package identity.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-package.log" FAKE_WOLF_PACKAGE=com.example.wolf \
+  run_wolf && fail 'Wolf accepted a different package'
+assert_wolf_not_installed
+assert_wolf_download_removed
+
+# Break caught: installing a different Wolf version code.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-version-code.log" FAKE_WOLF_VERSION_CODE=11900121 \
+  run_wolf && fail 'Wolf accepted a different version code'
+assert_wolf_not_installed
+
+# Break caught: installing a different Wolf version name.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-version-name.log" FAKE_WOLF_VERSION_NAME=0.1.9-other \
+  run_wolf && fail 'Wolf accepted a different version name'
+assert_wolf_not_installed
+
+# Break caught: accepting an APK incompatible with the API-25 target.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-min-sdk-low.log" FAKE_WOLF_MIN_SDK=20 \
+  run_wolf && fail 'Wolf accepted a lower minSdk'
+assert_wolf_not_installed
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-min-sdk-high.log" FAKE_WOLF_MIN_SDK=22 \
+  run_wolf && fail 'Wolf accepted a higher minSdk'
+assert_wolf_not_installed
+
+# Break caught: accepting a different target SDK or install location.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-target-sdk.log" FAKE_WOLF_TARGET_SDK=28 \
+  run_wolf && fail 'Wolf accepted a different targetSdk'
+assert_wolf_not_installed
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-location.log" FAKE_WOLF_INSTALL_LOCATION=auto \
+  run_wolf && fail 'Wolf accepted a different install location'
+assert_wolf_not_installed
+
+# Break caught: launching a package activity other than Wolf's launcher entry point.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-activity.log" FAKE_WOLF_ACTIVITY=.other.Activity \
+  run_wolf && fail 'Wolf accepted a different launchable activity'
+assert_wolf_not_installed
+
+# Break caught: accepting an APK without either required signature scheme.
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-v1.log" FAKE_WOLF_V1=false \
+  run_wolf && fail 'Wolf accepted a missing v1 signature'
+assert_wolf_not_installed
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-v2.log" FAKE_WOLF_V2=false \
+  run_wolf && fail 'Wolf accepted a missing v2 signature'
+assert_wolf_not_installed
+
+# Break caught: replacing a signed launcher when signer continuity is broken.
+WOLF_SIGNER_STATE="$TEST_TMP/wolf-signer-state"
+printf '%s\n' '11723945 0.1.7-FireTV' > "$WOLF_SIGNER_STATE"
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-signer.log" FAKE_WOLF_STATE="$WOLF_SIGNER_STATE" \
+FAKE_WOLF_SIGNER=00 run_wolf && fail 'Wolf accepted a different signing certificate'
+assert_wolf_not_installed
+[ "$(cat "$WOLF_SIGNER_STATE")" = '11723945 0.1.7-FireTV' ] || fail 'signer mismatch replaced the existing launcher'
+
+# Break caught: omitting -r or accepting an upgrade without exact final identity.
+WOLF_UPGRADE_STATE="$TEST_TMP/wolf-upgrade-state"
+printf '%s\n' '11723945 0.1.7-FireTV' > "$WOLF_UPGRADE_STATE"
+reset_wolf_fixture
+FAKE_WOLF_CURL_LOG="$TEST_TMP/wolf-curl-upgrade.log" FAKE_WOLF_STATE="$WOLF_UPGRADE_STATE" run_wolf ||
+  fail "Wolf upgrade fixture failed: $ERR"
+assert_contains "$OUT" 'WOLF_PREVIOUS_VERSION_CODE=11723945'
+assert_contains "$OUT" 'WOLF_PREVIOUS_VERSION_NAME=0.1.7-FireTV'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'install -r '
+[ "$(cat "$WOLF_UPGRADE_STATE")" = '11900120 0.1.9-Wolf' ] || fail 'Wolf upgrade did not finish at the pinned identity'
+assert_wolf_download_removed
 
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 python3 -B "$ROOT/tests/test-atomic-rename.py"

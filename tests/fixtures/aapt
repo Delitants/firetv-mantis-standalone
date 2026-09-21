@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+[ "$1" = dump ] && [ "$2" = badging ] && [ -n "${3:-}" ] || exit 64
+printf "package: name='%s' versionCode='%s' versionName='%s'\n" \
+  "${FAKE_WOLF_PACKAGE:-com.wolf.firelauncher}" \
+  "${FAKE_WOLF_VERSION_CODE:-11900120}" \
+  "${FAKE_WOLF_VERSION_NAME:-0.1.9-Wolf}"
+printf "sdkVersion:'%s'\n" "${FAKE_WOLF_MIN_SDK:-21}"
+printf "targetSdkVersion:'%s'\n" "${FAKE_WOLF_TARGET_SDK:-29}"
+printf "application: label='Wolf Launcher'\n"
+printf "launchable-activity: name='%s'  label='Wolf Launcher' icon=''\n" \
+  "${FAKE_WOLF_ACTIVITY:-com.wolf.firelauncher.screens.launcher.LauncherActivity}"
+printf "install-location:'%s'\n" "${FAKE_WOLF_INSTALL_LOCATION:-internalOnly}"

@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+[ -n "${1:-}" ] && [ -z "${2:-}" ] || exit 64
+printf '%s  %s\n' "${FAKE_WOLF_HASH:-d03ed56bb5564aa5b3e668831484917616510b02db4dde6a813d49a352054d05}" "$1"

@@ -10,10 +10,22 @@ if [ "$1" != "-s" ] || [ -z "${2:-}" ]; then
 fi
 shift 2
 
-if [ "$1" != "shell" ]; then
-  printf '%s\n' 'fake adb supports only shell commands' >&2
-  exit 64
+if [ "$1" = install ]; then
+  [ "${2:-}" = -r ] && [ -n "${3:-}" ] && [ -z "${4:-}" ] || {
+    printf 'invalid fake adb install command: %s\n' "$*" >&2
+    exit 64
+  }
+  if [ -n "${FAKE_WOLF_STATE:-}" ]; then
+    printf '%s\n' '11900120 0.1.9-Wolf' > "$FAKE_WOLF_STATE"
+  fi
+  printf '%s\n' "${FAKE_WOLF_INSTALL_RESULT:-Success}"
+  exit 0
 fi
+
+[ "$1" = shell ] || {
+  printf '%s\n' 'fake adb supports only install and shell commands' >&2
+  exit 64
+}
 shift
 
 case "$1" in
@@ -129,6 +141,27 @@ package:com.example.removed'} ;;
     ;;
   id)
     value=${FAKE_UID:-2000}
+    ;;
+  dumpsys)
+    [ "${2:-}" = package ] && [ "${3:-}" = com.wolf.firelauncher ] || {
+      printf 'unsupported fake dumpsys command: %s\n' "$*" >&2
+      exit 64
+    }
+    if [ -n "${FAKE_WOLF_STATE:-}" ] && [ -f "$FAKE_WOLF_STATE" ]; then
+      read -r wolf_version_code wolf_version_name < "$FAKE_WOLF_STATE"
+    else
+      wolf_version_code=${FAKE_WOLF_INSTALLED_VERSION_CODE:-11723945}
+      wolf_version_name=${FAKE_WOLF_INSTALLED_VERSION_NAME:-0.1.7-FireTV}
+    fi
+    value="versionCode=$wolf_version_code minSdk=21 targetSdk=29
+versionName=$wolf_version_name"
+    ;;
+  am)
+    [ "${2:-}" = start ] && [ "${3:-}" = -n ] && [ "${4:-}" = com.wolf.firelauncher/.screens.launcher.LauncherActivity ] || {
+      printf 'unsupported fake am command: %s\n' "$*" >&2
+      exit 64
+    }
+    value='Starting: Intent { cmp=com.wolf.firelauncher/.screens.launcher.LauncherActivity }'
     ;;
   *)
     printf 'unsupported fake adb shell command: %s\n' "$*" >&2

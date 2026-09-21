@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+[ "$1" = verify ] && [ "$2" = --verbose ] && [ "$3" = --print-certs ] && [ -n "${4:-}" ] || exit 64
+printf 'Verified using v1 scheme (JAR signing): %s\n' "${FAKE_WOLF_V1:-true}"
+printf 'Verified using v2 scheme (APK Signature Scheme v2): %s\n' "${FAKE_WOLF_V2:-true}"
+printf 'Signer #1 certificate SHA-256 digest: %s\n' "${FAKE_WOLF_SIGNER:-ea1270015ddbc06fd3b57b06b123c8c828ed5f76193611a18e8bd1fa7037819b}"

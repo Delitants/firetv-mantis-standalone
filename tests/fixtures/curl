@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+output=
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) output=$2; shift 2 ;;
+    --fail|--location) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+
+[ "$url" = "${FAKE_WOLF_CURL_EXPECTED_URL:-https://archive.org/download/wolf-launcher-0.1.9-wolf_202110/WolfLauncher_0.1.9-Wolf.apk}" ] || {
+  printf 'unexpected Wolf URL: %s\n' "$url" >&2
+  exit 22
+}
+[ -n "$output" ] || exit 64
+size=${FAKE_WOLF_SIZE:-3272501}
+head -c "$size" /dev/zero > "$output"
+if [ -n "${FAKE_WOLF_CURL_LOG:-}" ]; then
+  printf 'output=%s\nurl=%s\n' "$output" "$url" > "$FAKE_WOLF_CURL_LOG"
+fi

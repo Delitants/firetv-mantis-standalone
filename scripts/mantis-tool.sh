@@ -2,6 +2,9 @@
 set -eu
 
 ADB=adb
+CURL=curl
+AAPT=aapt
+APKSIGNER=apksigner
 SERIAL=
 YES=no
 COMMAND=
@@ -9,7 +12,7 @@ OUTPUT=
 CR=$(printf '\r')
 
 usage() {
-  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] --serial SERIAL [--output DIR] [--yes] audit|apply' >&2
+  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] --serial SERIAL [--output DIR] [--yes] audit|apply|install-wolf' >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -17,6 +20,21 @@ while [ "$#" -gt 0 ]; do
     --adb)
       [ "$#" -ge 2 ] || { usage; exit 64; }
       ADB=$2
+      shift 2
+      ;;
+    --curl)
+      [ "$#" -ge 2 ] || { usage; exit 64; }
+      CURL=$2
+      shift 2
+      ;;
+    --aapt)
+      [ "$#" -ge 2 ] || { usage; exit 64; }
+      AAPT=$2
+      shift 2
+      ;;
+    --apksigner)
+      [ "$#" -ge 2 ] || { usage; exit 64; }
+      APKSIGNER=$2
       shift 2
       ;;
     --serial)
@@ -419,6 +437,117 @@ require_restore_capability() {
   }
 }
 
+WOLF_URL=https://archive.org/download/wolf-launcher-0.1.9-wolf_202110/WolfLauncher_0.1.9-Wolf.apk
+WOLF_SIZE=3272501
+WOLF_APK_SHA256=d03ed56bb5564aa5b3e668831484917616510b02db4dde6a813d49a352054d05
+WOLF_PACKAGE=com.wolf.firelauncher
+WOLF_VERSION_CODE=11900120
+WOLF_VERSION_NAME=0.1.9-Wolf
+WOLF_MIN_SDK=21
+WOLF_TARGET_SDK=29
+WOLF_INSTALL_LOCATION=internalOnly
+WOLF_ACTIVITY=.screens.launcher.LauncherActivity
+WOLF_COMPONENT=$WOLF_PACKAGE/$WOLF_ACTIVITY
+WOLF_CERT_SHA256=ea1270015ddbc06fd3b57b06b123c8c828ed5f76193611a18e8bd1fa7037819b
+
+wolf_fail() {
+  printf 'Wolf verification failed: %s\n' "$1" >&2
+  exit 1
+}
+
+wolf_badging_value() {
+  wolf_line=$1
+  wolf_key=$2
+  printf '%s\n' "$wolf_line" | sed -n "s/.*${wolf_key}='\\([^']*\\)'.*/\\1/p" | head -n 1
+}
+
+wolf_print_installed_identity() {
+  wolf_package_dump=$1
+  WOLF_INSTALLED_VERSION_CODE=$(printf '%s\n' "$wolf_package_dump" | sed -n 's/.*versionCode=\([0-9][0-9]*\).*/\1/p' | head -n 1)
+  WOLF_INSTALLED_VERSION_NAME=$(printf '%s\n' "$wolf_package_dump" | sed -n 's/^versionName=\(.*\)$/\1/p' | head -n 1)
+}
+
+install_wolf() {
+  require_target
+  WOLF_TMP=$(mktemp -d "${TMPDIR:-/tmp}/wolf-launcher.XXXXXX") || {
+    printf '%s\n' 'unable to create a temporary Wolf download directory' >&2
+    exit 1
+  }
+  trap 'rm -rf "$WOLF_TMP"' EXIT HUP INT TERM
+  wolf_apk=$WOLF_TMP/WolfLauncher_0.1.9-Wolf.apk
+
+  "$CURL" --fail --location --output "$wolf_apk" "$WOLF_URL" || wolf_fail 'download failed'
+  wolf_bytes=$(wc -c < "$wolf_apk" | tr -d '[:space:]')
+  [ "$wolf_bytes" = "$WOLF_SIZE" ] || wolf_fail "byte count expected=$WOLF_SIZE actual=$wolf_bytes"
+  if command -v sha256sum >/dev/null 2>&1; then
+    wolf_hash=$(sha256sum "$wolf_apk" | awk '{print $1}')
+  else
+    wolf_hash=$(shasum -a 256 "$wolf_apk" | awk '{print $1}')
+  fi
+  [ "$wolf_hash" = "$WOLF_APK_SHA256" ] || wolf_fail 'APK SHA-256 does not match the pin'
+
+  wolf_badging=$("$AAPT" dump badging "$wolf_apk") || wolf_fail 'aapt badging inspection failed'
+  wolf_package_line=$(printf '%s\n' "$wolf_badging" | sed -n '/^package: /p' | head -n 1)
+  wolf_package=$(wolf_badging_value "$wolf_package_line" name)
+  wolf_version_code=$(wolf_badging_value "$wolf_package_line" versionCode)
+  wolf_version_name=$(wolf_badging_value "$wolf_package_line" versionName)
+  wolf_min_sdk=$(printf '%s\n' "$wolf_badging" | sed -n "s/^sdkVersion:'\\([^']*\\)'.*/\\1/p" | head -n 1)
+  wolf_target_sdk=$(printf '%s\n' "$wolf_badging" | sed -n "s/^targetSdkVersion:'\\([^']*\\)'.*/\\1/p" | head -n 1)
+  wolf_install_location=$(printf '%s\n' "$wolf_badging" | sed -n "s/^install-location:'\\([^']*\\)'.*/\\1/p" | head -n 1)
+  wolf_activity_line=$(printf '%s\n' "$wolf_badging" | sed -n '/^launchable-activity: /p' | head -n 1)
+  wolf_activity=$(wolf_badging_value "$wolf_activity_line" name)
+  [ "$wolf_package" = "$WOLF_PACKAGE" ] || wolf_fail "package expected=$WOLF_PACKAGE actual=$wolf_package"
+  [ "$wolf_version_code" = "$WOLF_VERSION_CODE" ] || wolf_fail "version code expected=$WOLF_VERSION_CODE actual=$wolf_version_code"
+  [ "$wolf_version_name" = "$WOLF_VERSION_NAME" ] || wolf_fail "version name expected=$WOLF_VERSION_NAME actual=$wolf_version_name"
+  [ "$wolf_min_sdk" = "$WOLF_MIN_SDK" ] || wolf_fail "minSdk expected=$WOLF_MIN_SDK actual=$wolf_min_sdk"
+  [ "$wolf_target_sdk" = "$WOLF_TARGET_SDK" ] || wolf_fail "targetSdk expected=$WOLF_TARGET_SDK actual=$wolf_target_sdk"
+  [ "$wolf_install_location" = "$WOLF_INSTALL_LOCATION" ] || wolf_fail "install location expected=$WOLF_INSTALL_LOCATION actual=$wolf_install_location"
+  case "$wolf_activity" in
+    "$WOLF_ACTIVITY"|"$WOLF_PACKAGE$WOLF_ACTIVITY") ;;
+    *) wolf_fail "activity expected=$WOLF_ACTIVITY actual=$wolf_activity" ;;
+  esac
+
+  wolf_signatures=$("$APKSIGNER" verify --verbose --print-certs "$wolf_apk") || wolf_fail 'apksigner verification failed'
+  case "$wolf_signatures" in
+    *'Verified using v1 scheme (JAR signing): true'*) ;;
+    *) wolf_fail 'v1 signature verification is missing' ;;
+  esac
+  case "$wolf_signatures" in
+    *'Verified using v2 scheme (APK Signature Scheme v2): true'*) ;;
+    *) wolf_fail 'v2 signature verification is missing' ;;
+  esac
+  wolf_cert=$(printf '%s\n' "$wolf_signatures" | sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p' | tr -d ' :\r' | tr '[:upper:]' '[:lower:]')
+  [ "$wolf_cert" = "$WOLF_CERT_SHA256" ] || wolf_fail 'signer certificate SHA-256 does not match the pin'
+  printf '%s\n' 'WOLF_VERIFY=PASS'
+  printf '%s\n' 'WOLF_CHECK_SCOPE=integrity and signer continuity only; publisher authenticity and malware safety are not established'
+
+  if read_shell dumpsys package "$WOLF_PACKAGE"; then
+    wolf_print_installed_identity "$ACTUAL"
+    if [ -n "$WOLF_INSTALLED_VERSION_CODE" ] && [ -n "$WOLF_INSTALLED_VERSION_NAME" ]; then
+      printf 'WOLF_PREVIOUS_VERSION_CODE=%s\n' "$WOLF_INSTALLED_VERSION_CODE"
+      printf 'WOLF_PREVIOUS_VERSION_NAME=%s\n' "$WOLF_INSTALLED_VERSION_NAME"
+    fi
+  fi
+  wolf_install=$(adb_cmd install -r "$wolf_apk") || wolf_fail 'adb install -r failed'
+  case "$wolf_install" in
+    *Success*) ;;
+    *) wolf_fail 'adb install -r did not report Success' ;;
+  esac
+  read_shell dumpsys package "$WOLF_PACKAGE" || wolf_fail 'installed package readback failed'
+  wolf_print_installed_identity "$ACTUAL"
+  [ "$WOLF_INSTALLED_VERSION_CODE" = "$WOLF_VERSION_CODE" ] || wolf_fail "installed version code expected=$WOLF_VERSION_CODE actual=$WOLF_INSTALLED_VERSION_CODE"
+  [ "$WOLF_INSTALLED_VERSION_NAME" = "$WOLF_VERSION_NAME" ] || wolf_fail "installed version name expected=$WOLF_VERSION_NAME actual=$WOLF_INSTALLED_VERSION_NAME"
+  printf 'WOLF_INSTALLED_VERSION_CODE=%s\n' "$WOLF_INSTALLED_VERSION_CODE"
+  printf 'WOLF_INSTALLED_VERSION_NAME=%s\n' "$WOLF_INSTALLED_VERSION_NAME"
+  wolf_launch=$(adb_shell am start -n "$WOLF_COMPONENT") || wolf_fail 'direct launcher start failed'
+  case "$wolf_launch" in
+    *'Starting: Intent'*) ;;
+    *) wolf_fail 'direct launcher start did not report a launch intent' ;;
+  esac
+  printf '%s\n' 'WOLF_DIRECT_LAUNCH=PASS'
+  printf '%s\n' 'WOLF_INSTALL=PASS'
+}
+
 case "$COMMAND" in
   audit)
     audit
@@ -429,6 +558,10 @@ case "$COMMAND" in
     validate_manifests
     require_restore_capability
     printf '%s\n' 'No mutation is implemented.'
+    ;;
+  install-wolf)
+    [ "$YES" = yes ] || { printf '%s\n' '--yes is required for install-wolf' >&2; exit 64; }
+    install_wolf
     ;;
   *)
     usage
