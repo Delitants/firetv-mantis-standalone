@@ -27,7 +27,98 @@ case "$1" in
       ro.build.version.release) value=${FAKE_RELEASE:-7.1.2} ;;
       ro.build.version.sdk) value=${FAKE_SDK:-25} ;;
       ro.product.cpu.abi) value=${FAKE_ABI:-armeabi-v7a} ;;
+      persist.sys.locale) value=${FAKE_PERSIST_SYS_LOCALE:-en-US} ;;
+      system_locales) value=${FAKE_SYSTEM_LOCALES:-en-US} ;;
       *) value= ;;
+    esac
+    ;;
+  printenv)
+    [ "${2:-}" = "HOME" ] || { printf '%s\n' 'fake adb only exposes HOME via printenv' >&2; exit 64; }
+    value=${FAKE_HOME:-/data/local/tmp}
+    ;;
+  settings)
+    [ "${2:-}" = "get" ] && [ "${3:-}" = "global" ] && [ "${4:-}" = "bluetooth_on" ] || {
+      printf '%s\n' 'fake adb only exposes global bluetooth_on' >&2
+      exit 64
+    }
+    value=${FAKE_BLUETOOTH_ON:-1}
+    ;;
+  ip)
+    [ "${2:-}" = "link" ] && [ "${3:-}" = "show" ] && [ "${4:-}" = "tun0" ] || {
+      printf '%s\n' 'fake adb only exposes ip link show tun0' >&2
+      exit 64
+    }
+    value=${FAKE_TUN0:-'7: tun0: <POINTOPOINT,NOARP,UP,LOWER_UP>'}
+    ;;
+  cmd)
+    case "${2:-}" in
+      package)
+        case "${3:-}" in
+          help)
+            value=${FAKE_CMD_PACKAGE_HELP:-'install-existing --user USER_ID PACKAGE'}
+            ;;
+          resolve-activity)
+            action=
+            shift 3
+            while [ "$#" -gt 0 ]; do
+              if [ "$1" = "-a" ]; then
+                action=${2:-}
+                break
+              fi
+              shift
+            done
+            case "$action" in
+              android.settings.SETTINGS) value='com.amazon.tv.settings/.SettingsActivity' ;;
+              android.settings.WIFI_SETTINGS) value='com.amazon.tv.settings/.wifi.WifiSettingsActivity' ;;
+              android.settings.MANAGE_APPLICATIONS_SETTINGS) value='com.amazon.tv.settings/.applications.ManageApplicationsActivity' ;;
+              android.settings.CONTROLLERS_SETTINGS) value='com.amazon.tv.settings/.controllers.ControllersActivity' ;;
+              android.settings.DEVICE_INFO_SETTINGS) value='com.amazon.tv.settings/.device.DeviceInfoSettingsActivity' ;;
+              android.settings.ACCESSIBILITY_SETTINGS) value='com.amazon.tv.settings/.accessibility.AccessibilitySettingsActivity' ;;
+              android.settings.DISPLAY_SETTINGS) value='com.amazon.tv.settings/.display.DisplaySettingsActivity' ;;
+              com.amazon.device.settings.action.DATE_TIME) value='com.amazon.tv.settings/.date.DateTimeSettingsActivity' ;;
+              com.amazon.device.settings.action.LANGUAGE) value='com.amazon.tv.settings/.locale.LocaleSettingsActivity' ;;
+              android.intent.action.MAIN) value='com.amazon.tv.launcher/.HomeActivity' ;;
+              *) printf 'unknown fake resolver action: %s\n' "$action" >&2; exit 64 ;;
+            esac
+            ;;
+          install-existing)
+            [ "${4:-}" = "--user" ] && [ "${5:-}" = "0" ] && [ -n "${6:-}" ] || {
+              printf 'invalid fake cmd install-existing command: %s\n' "$*" >&2
+              exit 64
+            }
+            value="installed ${6}"
+            ;;
+          *) printf 'unsupported fake cmd package command: %s\n' "$*" >&2; exit 64 ;;
+        esac
+        ;;
+      *) printf 'unsupported fake cmd command: %s\n' "$*" >&2; exit 64 ;;
+    esac
+    ;;
+  pm)
+    case "${2:-}" in
+      help)
+        value=${FAKE_PM_HELP:-'install-existing --user USER_ID PACKAGE'}
+        ;;
+      list)
+        [ "${3:-}" = "packages" ] || { printf 'unsupported fake pm list: %s\n' "$*" >&2; exit 64; }
+        case "${4:-}" in
+          '') value=${FAKE_PACKAGES_ACTIVE:-'package:com.amazon.tv.settings
+package:com.example.active'} ;;
+          -u) value=${FAKE_PACKAGES_UNINSTALLED:-'package:com.amazon.tv.settings
+package:com.example.active
+package:com.example.removed'} ;;
+          -d) value=${FAKE_PACKAGES_DISABLED:-'package:com.example.disabled'} ;;
+          *) printf 'unsupported fake pm list packages flag: %s\n' "${4:-}" >&2; exit 64 ;;
+        esac
+        ;;
+      install-existing)
+        [ "${3:-}" = "--user" ] && [ "${4:-}" = "0" ] && [ -n "${5:-}" ] || {
+          printf 'invalid fake pm install-existing command: %s\n' "$*" >&2
+          exit 64
+        }
+        value="installed ${5}"
+        ;;
+      *) printf 'unsupported fake pm command: %s\n' "$*" >&2; exit 64 ;;
     esac
     ;;
   uname)
