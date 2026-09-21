@@ -149,6 +149,7 @@ run_tool_interrupted() {
 }
 
 run_wolf() {
+  LAST_WOLF_CURL_LOG=$FAKE_WOLF_CURL_LOG
   export FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_HASH FAKE_WOLF_PACKAGE
   export FAKE_WOLF_VERSION_CODE FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK
   export FAKE_WOLF_INSTALL_LOCATION FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER
@@ -173,6 +174,7 @@ reset_wolf_fixture() {
   unset FAKE_WOLF_VERSION_CODE FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK
   unset FAKE_WOLF_INSTALL_LOCATION FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER
   unset FAKE_WOLF_STATE FAKE_WOLF_CURL_LOG FAKE_WOLF_DUMPSYS_INDENT
+  unset LAST_WOLF_CURL_LOG
 }
 
 prepare_package_state() {
@@ -217,7 +219,7 @@ assert_wolf_not_installed() {
 }
 
 assert_wolf_download_removed() {
-  wolf_download=$(sed -n 's/^output=//p' "$FAKE_WOLF_CURL_LOG")
+  wolf_download=$(sed -n 's/^output=//p' "$LAST_WOLF_CURL_LOG")
   [ -n "$wolf_download" ] || fail 'Wolf curl fixture did not record an output path'
   [ ! -e "$wolf_download" ] || fail "Wolf temporary APK remained at $wolf_download"
 }
