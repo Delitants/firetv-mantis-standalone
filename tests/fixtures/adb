@@ -91,7 +91,21 @@ settings_route() {
     com.amazon.device.settings.action.DATE_TIME) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity' ;;
     com.amazon.device.settings.action.LANGUAGE) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.LanguageSelectActivity' ;;
     android.settings.APPLICATION_DEVELOPMENT_SETTINGS) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.device.DeviceActivity' ;;
-    android.intent.action.MAIN) printf '%s\n' "${FAKE_HOME_RESOLVER:-com.amazon.tv.launcher/.HomeActivity}" ;;
+    android.intent.action.MAIN)
+      if [ -n "${FAKE_AFTER_DISABLE_HOME_RESOLVER+x}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
+        awk '$1 == "disabled" { found=1 } END { exit !found }' "$FAKE_PACKAGE_STATE"
+      then
+        printf '%s\n' "$FAKE_AFTER_DISABLE_HOME_RESOLVER"
+      elif [ -n "${FAKE_HOME_RESOLVER+x}" ]; then
+        printf '%s\n' "$FAKE_HOME_RESOLVER"
+      elif [ "${FAKE_HOME_RESOLVER_VERBOSE:-no}" = yes ]; then
+        printf '%s\n' \
+          'priority=950 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true' \
+          'com.amazon.tv.launcher/.ui.HomeActivity_vNext'
+      else
+        printf '%s\n' 'com.amazon.tv.launcher/.HomeActivity'
+      fi
+      ;;
     *) return 1 ;;
   esac
 }

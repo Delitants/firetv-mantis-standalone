@@ -34,7 +34,7 @@ unset FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_PACKAGE_STATE FAKE_DISABLE_MODE FAKE_DISA
 unset FAKE_AFTER_DISABLE_ADB_ENABLED FAKE_DISABLE_RESULT FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT
 unset FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT FAKE_ENABLE_FAIL_PACKAGE
 unset FAKE_ENABLE_INTERRUPT_MARKER FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE FAKE_AFTER_ENABLE_BLUETOOTH_ON
-unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
+unset FAKE_HOME_RESOLVER FAKE_HOME_RESOLVER_VERBOSE FAKE_AFTER_DISABLE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PM_HELP_STATUS FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
 unset FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK FAKE_WOLF_INSTALL_LOCATION
@@ -202,7 +202,7 @@ prepare_package_state() {
   unset FAKE_ENABLE_INTERRUPT_MARKER FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE FAKE_AFTER_ENABLE_BLUETOOTH_ON
   unset FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT
   unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PM_HELP_STATUS
-  unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
+  unset FAKE_HOME_RESOLVER FAKE_HOME_RESOLVER_VERBOSE FAKE_AFTER_DISABLE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
 }
 
 [ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 32 ] || fail 'remove-user0.txt must contain exactly 32 packages'
@@ -304,6 +304,54 @@ assert_contains "$BASELINE_CONTENT" 'service.adb.tcp.port=5555'
 assert_contains "$BASELINE_CONTENT" 'init.svc.adbd=running'
 assert_contains "$BASELINE_CONTENT" 'always_on_vpn_app=com.wireguard.android'
 assert_contains "$BASELINE_CONTENT" 'tun0=present'
+
+# Break caught: the live resolver is verbose and names the stock vNext HOME.
+# The exact parsed component, not a stale hard-code, is the checksummed guard.
+VERBOSE_HOME_AUDIT_DIR="$TEST_TMP/audit-home-verbose"
+FAKE_HOME_RESOLVER_VERBOSE=yes run_tool --output "$VERBOSE_HOME_AUDIT_DIR" audit ||
+  fail "verbose HOME audit failed: $ERR"
+VERIFY_BASELINE=$VERBOSE_HOME_AUDIT_DIR
+prepare_package_state
+set_wolf_ready
+FAKE_HOME_RESOLVER_VERBOSE=yes run_verify ||
+  fail "verify rejected the production-shaped HOME resolver: $ERR"
+assert_contains "$(cat "$VERBOSE_HOME_AUDIT_DIR/home-resolver.txt")" 'priority=950 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true'
+assert_contains "$(cat "$VERBOSE_HOME_AUDIT_DIR/home-resolver.txt")" 'com.amazon.tv.launcher/.ui.HomeActivity_vNext'
+assert_contains "$(cat "$VERBOSE_HOME_AUDIT_DIR/verification-baseline.txt")" 'home_resolver_component=com.amazon.tv.launcher/.ui.HomeActivity_vNext'
+verify_checksums "$VERBOSE_HOME_AUDIT_DIR" || fail 'verbose HOME audit checksums failed'
+unset FAKE_HOME_RESOLVER_VERBOSE
+if run_verify; then
+  fail 'verify accepted a HOME component that drifted from its audit baseline'
+fi
+assert_contains "$ERR" 'guard HOME resolver expected=com.amazon.tv.launcher/.ui.HomeActivity_vNext actual=com.amazon.tv.launcher/.HomeActivity'
+VERIFY_BASELINE=$AUDIT_DIR
+
+FOREIGN_HOME_AUDIT_DIR="$TEST_TMP/audit-home-foreign"
+if FAKE_HOME_RESOLVER=com.example.launcher/.Home run_tool --output "$FOREIGN_HOME_AUDIT_DIR" audit; then
+  fail 'audit accepted a non-Amazon HOME resolver'
+fi
+assert_contains "$ERR" 'HOME resolver'
+MISSING_HOME_AUDIT_DIR="$TEST_TMP/audit-home-missing"
+if FAKE_HOME_RESOLVER='priority=950 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true' \
+  run_tool --output "$MISSING_HOME_AUDIT_DIR" audit; then
+  fail 'audit accepted HOME metadata without a component'
+fi
+assert_contains "$ERR" 'HOME resolver'
+AMBIGUOUS_HOME_AUDIT_DIR="$TEST_TMP/audit-home-ambiguous"
+if FAKE_HOME_RESOLVER='com.amazon.tv.launcher/.HomeActivity
+com.amazon.tv.launcher/.ui.HomeActivity_vNext' \
+  run_tool --output "$AMBIGUOUS_HOME_AUDIT_DIR" audit; then
+  fail 'audit accepted ambiguous HOME components'
+fi
+assert_contains "$ERR" 'HOME resolver'
+MALFORMED_HOME_AUDIT_DIR="$TEST_TMP/audit-home-malformed"
+if FAKE_HOME_RESOLVER='unparsed diagnostic prose
+com.amazon.tv.launcher/.ui.HomeActivity_vNext' \
+  run_tool --output "$MALFORMED_HOME_AUDIT_DIR" audit; then
+  fail 'audit accepted malformed HOME resolver output'
+fi
+assert_contains "$ERR" 'HOME resolver'
+unset FAKE_HOME_RESOLVER
 
 # Break caught: bypassing the production atomic-rename helper on normal publication.
 HELPER_AUDIT_DIR="$TEST_TMP/audit-helper"
@@ -479,6 +527,20 @@ assert_contains "$OUT" 'DISABLE=com.amazon.bueller.music RESTORE=pm enable --use
 assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
 
+# Break caught: apply and fresh restore must carry the exact verbose HOME
+# component through the checksummed baseline and compare it after every action.
+PACKAGE_VERBOSE_HOME_DIR="$TEST_TMP/apply-home-verbose"
+prepare_package_state
+set_wolf_ready
+FAKE_HOME_RESOLVER_VERBOSE=yes \
+  run_tool --output "$PACKAGE_VERBOSE_HOME_DIR" --yes apply ||
+  fail "apply rejected the production-shaped HOME resolver: $ERR"
+assert_contains "$(cat "$PACKAGE_VERBOSE_HOME_DIR/verification-baseline.txt")" 'home_resolver_component=com.amazon.tv.launcher/.ui.HomeActivity_vNext'
+FAKE_HOME_RESOLVER_VERBOSE=yes run_tool restore "$PACKAGE_VERBOSE_HOME_DIR" ||
+  fail "restore rejected the production-shaped HOME resolver: $ERR"
+assert_contains "$OUT" 'RESTORE=PASS'
+unset FAKE_HOME_RESOLVER_VERBOSE
+
 # Break caught: Fire OS returns status 1 for authoritative pm help usage. Exact
 # disable/enable syntax still permits apply after a live transport check.
 PACKAGE_NONZERO_HELP_DIR="$TEST_TMP/apply-nonzero-help"
@@ -515,8 +577,20 @@ set_wolf_ready
 if FAKE_HOME_RESOLVER='com.example.launcher/.Home' run_tool --output "$PACKAGE_HOME_GUARD_DIR" --yes apply; then
   fail 'apply accepted a non-stock HOME resolver'
 fi
-assert_contains "$ERR" 'guard HOME resolver expected=com.amazon.tv.launcher/.HomeActivity actual=com.example.launcher/.Home'
+assert_contains "$ERR" 'guard HOME resolver package expected=com.amazon.tv.launcher actual=com.example.launcher'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
+
+# Break caught: a valid Amazon HOME component must remain byte-for-byte equal
+# to the checksummed baseline after each package action.
+PACKAGE_HOME_DRIFT_DIR="$TEST_TMP/apply-home-drift"
+prepare_package_state
+set_wolf_ready
+FAKE_AFTER_DISABLE_HOME_RESOLVER=com.amazon.tv.launcher/.ui.HomeActivity_vNext \
+  run_tool --output "$PACKAGE_HOME_DRIFT_DIR" --yes apply &&
+  fail 'apply accepted HOME component drift after disable'
+assert_contains "$ERR" 'guard HOME resolver expected=com.amazon.tv.launcher/.HomeActivity actual=com.amazon.tv.launcher/.ui.HomeActivity_vNext'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
+verify_checksums "$PACKAGE_HOME_DRIFT_DIR" || fail 'HOME drift rollback left stale checksums'
 
 # Break caught: accepting a successful command that leaves a package enabled.
 PACKAGE_STILL_ACTIVE_DIR="$TEST_TMP/apply-still-active"

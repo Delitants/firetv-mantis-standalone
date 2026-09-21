@@ -314,6 +314,55 @@ write_settings_route_resolvers() {
   done
 }
 
+parse_home_resolver_output() {
+  home_resolver_output=$1
+  if ! HOME_RESOLVER_COMPONENT=$(printf '%s\n' "$home_resolver_output" | awk '
+    function valid_package(value) {
+      return value ~ /^[A-Za-z0-9_$]+([.][A-Za-z0-9_$]+)+$/
+    }
+    function valid_class(value) {
+      return value ~ /^[.][A-Za-z0-9_$]+([.][A-Za-z0-9_$]+)*$/ || valid_package(value)
+    }
+    /^[[:space:]]*$/ { invalid = 1; next }
+    /^priority=-?[0-9]+ preferredOrder=-?[0-9]+ match=0x[0-9A-Fa-f]+ specificIndex=-?[0-9]+ isDefault=(true|false)$/ { next }
+    {
+      fields = split($0, component_fields, "/")
+      if (fields == 2 && valid_package(component_fields[1]) && valid_class(component_fields[2])) {
+        components++
+        component = $0
+        next
+      }
+      invalid = 1
+    }
+    END {
+      if (invalid || components != 1) exit 1
+      print component
+    }
+  '); then
+    printf 'guard HOME resolver output is invalid: %s\n' "$home_resolver_output" >&2
+    return 1
+  fi
+  home_resolver_package=${HOME_RESOLVER_COMPONENT%%/*}
+  [ "$home_resolver_package" = com.amazon.tv.launcher ] || {
+    printf 'guard HOME resolver package expected=com.amazon.tv.launcher actual=%s\n' "$home_resolver_package" >&2
+    return 1
+  }
+}
+
+capture_home_resolver() {
+  read_shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME || return 1
+  HOME_RESOLVER_RAW=$ACTUAL
+  parse_home_resolver_output "$HOME_RESOLVER_RAW"
+}
+
+write_home_resolver_capture() {
+  audit_file=$1
+  read_shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME || return 1
+  HOME_RESOLVER_RAW=$ACTUAL
+  printf '%s\n' "$HOME_RESOLVER_RAW" > "$audit_file" || return 1
+  parse_home_resolver_output "$HOME_RESOLVER_RAW"
+}
+
 write_verification_baseline() {
   audit_file=$1
   : > "$audit_file"
@@ -337,6 +386,15 @@ write_verification_baseline() {
   else
     printf 'tun0=absent\n' >> "$audit_file"
   fi
+  [ -n "${HOME_RESOLVER_COMPONENT:-}" ] || return 1
+  if [ -n "${GUARD_HOME_RESOLVER_COMPONENT+x}" ] &&
+    [ "$HOME_RESOLVER_COMPONENT" != "$GUARD_HOME_RESOLVER_COMPONENT" ]
+  then
+    printf 'guard HOME resolver changed during audit expected=%s actual=%s\n' \
+      "$GUARD_HOME_RESOLVER_COMPONENT" "$HOME_RESOLVER_COMPONENT" >&2
+    return 1
+  fi
+  printf 'home_resolver_component=%s\n' "$HOME_RESOLVER_COMPONENT" >> "$audit_file"
 }
 
 write_tun0_capture() {
@@ -444,9 +502,9 @@ publish_audit() {
     ! write_shell_capture "$work_dir/home-directory.txt" printenv HOME ||
     ! write_labeled_shell_capture "$work_dir/bluetooth.txt" bluetooth_on settings get global bluetooth_on ||
     ! write_tun0_capture "$work_dir/tun0.txt" ||
+    ! write_home_resolver_capture "$work_dir/home-resolver.txt" ||
     ! write_verification_baseline "$work_dir/verification-baseline.txt" ||
     ! write_settings_route_resolvers "$work_dir/settings-route-resolvers.txt" ||
-    ! write_shell_capture "$work_dir/home-resolver.txt" cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME ||
     ! printf 'PACKAGE_OPERATION=%s\nPACKAGE_RESTORE=%s\n' \
       "${PACKAGE_OPERATION:-unsupported}" "${PACKAGE_RESTORE:-unsupported}" > "$work_dir/package-mode.txt" ||
     ! write_restore_script "$work_dir/restore-user0.sh" "$PACKAGE_STATE_CAPABILITY" ||
@@ -722,6 +780,9 @@ verify_vpn_and_locale() {
     printf 'verify tun0 expected=%s actual=%s\n' "$expected_tun" "$actual_tun" >&2
     return 1
   }
+  read_baseline_value "$baseline_file" home_resolver_component || return 1
+  parse_home_resolver_output "$BASELINE_VALUE" || return 1
+  GUARD_HOME_RESOLVER_COMPONENT=$HOME_RESOLVER_COMPONENT
 }
 
 verify() {
@@ -841,9 +902,14 @@ verify_settings() {
 }
 
 require_home_resolver() {
-  read_shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME || return 1
-  [ "$ACTUAL" = com.amazon.tv.launcher/.HomeActivity ] || {
-    printf 'guard HOME resolver expected=com.amazon.tv.launcher/.HomeActivity actual=%s\n' "$ACTUAL" >&2
+  [ -n "${GUARD_HOME_RESOLVER_COMPONENT:-}" ] || {
+    printf '%s\n' 'guard HOME resolver baseline is missing' >&2
+    return 1
+  }
+  capture_home_resolver || return 1
+  [ "$HOME_RESOLVER_COMPONENT" = "$GUARD_HOME_RESOLVER_COMPONENT" ] || {
+    printf 'guard HOME resolver expected=%s actual=%s\n' \
+      "$GUARD_HOME_RESOLVER_COMPONENT" "$HOME_RESOLVER_COMPONENT" >&2
     return 1
   }
 }
@@ -908,7 +974,8 @@ capture_guard_baseline() {
   read_guard_value always_on_vpn_lockdown settings get secure always_on_vpn_lockdown || return 1
   GUARD_ALWAYS_ON_VPN_LOCKDOWN=$GUARD_VALUE
   capture_tun0_state
-  require_home_resolver || return 1
+  capture_home_resolver || return 1
+  GUARD_HOME_RESOLVER_COMPONENT=$HOME_RESOLVER_COMPONENT
   require_tcp_8009 || return 1
   require_settings_routes || return 1
   case "${NETWORK_SERIAL:-$SERIAL}" in
@@ -951,6 +1018,9 @@ load_guard_baseline() {
   read_baseline_value "$baseline_file" always_on_vpn_app || return 1; GUARD_ALWAYS_ON_VPN_APP=$BASELINE_VALUE
   read_baseline_value "$baseline_file" always_on_vpn_lockdown || return 1; GUARD_ALWAYS_ON_VPN_LOCKDOWN=$BASELINE_VALUE
   read_baseline_value "$baseline_file" tun0 || return 1; GUARD_BASELINE_TUN0_STATE=$BASELINE_VALUE
+  read_baseline_value "$baseline_file" home_resolver_component || return 1
+  parse_home_resolver_output "$BASELINE_VALUE" || return 1
+  GUARD_HOME_RESOLVER_COMPONENT=$HOME_RESOLVER_COMPONENT
   [ "$GUARD_BLUETOOTH_ON" = 1 ] || return 1
   [ "$GUARD_ADB_ENABLED" = 1 ] || return 1
   require_usb_adb "$GUARD_PERSIST_USB_CONFIG" || return 1
