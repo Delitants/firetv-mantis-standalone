@@ -1,13 +1,24 @@
 # Package rationale
 
-The removal manifest is deliberately small and is validated against the
-preservation manifests before any action. Packages not explicitly listed are
-not candidates for removal.
+The candidate manifest is deliberately small and is validated against the
+preservation manifests before any action. Its historical filename is
+`remove-user0.txt`, but the operation is a per-user disable: no APK or system
+image content is erased. Packages not explicitly listed are not candidates for
+disablement.
 
 The preservation lists cover stock Settings and its dependencies, Home,
 Bluetooth/input, networking, DIAL/SSDP, Whisper services, package installation,
 and recovery support. The three protected user applications are preserved even
 when a generic package category might otherwise make them appear removable.
+
+The enabled package inventory (`pm list packages -e`) is the operative set.
+Each candidate must begin enabled, then be absent from that inventory and
+present in `pm list packages -d` after `pm disable-user --user 0`. A candidate
+already present only in the disabled inventory is skipped and never recorded
+for restore. A candidate in neither inventory, or in both, is a hard failure.
+Only verified state transitions enter the checksummed
+`disabled-successfully.txt` ledger; restore runs `pm enable --user 0` over that
+ledger in reverse order and verifies the inverse transition.
 
 Wolf Launcher is pinned to version code `11900120` and version name
 `0.1.9-Wolf`, package `com.wolf.firelauncher`, and its launcher activity. An

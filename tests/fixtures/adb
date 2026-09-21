@@ -55,18 +55,18 @@ package_list() {
   list_kind=$1
   if [ -z "${FAKE_PACKAGE_STATE:-}" ]; then
     case "$list_kind" in
-      active) printf '%s\n' 'package:com.amazon.tv.settings' 'package:com.example.active' ;;
+      enabled) printf '%s\n' 'package:com.amazon.tv.settings' 'package:com.example.active' ;;
       all) printf '%s\n' 'package:com.amazon.tv.settings' 'package:com.example.active' 'package:com.example.removed' ;;
       disabled) printf '%s\n' 'package:com.example.disabled' ;;
     esac
     return
   fi
   case "$list_kind" in
-    active)
+    enabled)
       awk '$1 == "active" { print "package:" $2 }' "$FAKE_PACKAGE_STATE"
       ;;
     all)
-      awk '$1 == "active" || $1 == "uninstalled" { print "package:" $2 }' "$FAKE_PACKAGE_STATE"
+      awk '$1 == "active" || $1 == "disabled" { print "package:" $2 }' "$FAKE_PACKAGE_STATE"
       ;;
     disabled)
       awk '$1 == "disabled" { print "package:" $2 }' "$FAKE_PACKAGE_STATE"
@@ -140,8 +140,8 @@ case "$1" in
       sys.usb.config) value=${FAKE_SYS_USB_CONFIG:-mtp,adb} ;;
       service.adb.tcp.port) value=${FAKE_SERVICE_ADB_TCP_PORT:-5555} ;;
       persist.adb.tcp.port)
-        if [ -n "${FAKE_AFTER_UNINSTALL_PERSIST_ADB_TCP_PORT+x}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] && awk '$1 == "uninstalled" { found=1 } END { exit !found }' "$FAKE_PACKAGE_STATE"; then
-          value=$FAKE_AFTER_UNINSTALL_PERSIST_ADB_TCP_PORT
+        if [ -n "${FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT+x}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] && awk '$1 == "disabled" { found=1 } END { exit !found }' "$FAKE_PACKAGE_STATE"; then
+          value=$FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT
         else value=${FAKE_PERSIST_ADB_TCP_PORT-5555}; fi
         ;;
       init.svc.adbd) value=${FAKE_INIT_SVC_ADBD:-running} ;;
@@ -157,13 +157,13 @@ case "$1" in
     case "${3:-}:${4:-}" in
       global:bluetooth_on) value=${FAKE_BLUETOOTH_ON:-1} ;;
       global:adb_enabled)
-        if [ -n "${FAKE_AFTER_UNINSTALL_ADB_ENABLED:-}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
-          awk -v after_count="${FAKE_AFTER_UNINSTALL_ADB_ENABLED_AFTER_COUNT:-1}" '
-            $1 == "uninstalled" || $1 == "missing" { count++ }
+        if [ -n "${FAKE_AFTER_DISABLE_ADB_ENABLED:-}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
+          awk -v after_count="${FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT:-1}" '
+            $1 == "disabled" || $1 == "missing" { count++ }
             END { exit !(count >= after_count) }
           ' "$FAKE_PACKAGE_STATE"
         then
-          value=$FAKE_AFTER_UNINSTALL_ADB_ENABLED
+          value=$FAKE_AFTER_DISABLE_ADB_ENABLED
         else
           value=${FAKE_ADB_ENABLED:-1}
         fi
@@ -192,7 +192,7 @@ case "$1" in
       package)
         case "${3:-}" in
           help)
-            value=${FAKE_CMD_PACKAGE_HELP:-'install-existing --user USER_ID PACKAGE'}
+            value=${FAKE_CMD_PACKAGE_HELP:-'no supported package state commands'}
             ;;
           resolve-activity)
             action=
@@ -206,18 +206,6 @@ case "$1" in
             done
             value=$(settings_route "$action") || { printf 'unknown fake resolver action: %s\n' "$action" >&2; exit 64; }
             ;;
-          install-existing)
-            [ "${4:-}" = "--user" ] && [ "${5:-}" = "0" ] && [ -n "${6:-}" ] || {
-              printf 'invalid fake cmd install-existing command: %s\n' "$*" >&2
-              exit 64
-            }
-            if [ "${FAKE_INSTALL_EXISTING_FAIL_PACKAGE:-}" = "${6}" ]; then
-              printf '%s\n' 'Failure [restore failed]'
-              exit 1
-            fi
-            replace_package_state "${6}" active
-            value="installed ${6}"
-            ;;
           *) printf 'unsupported fake cmd package command: %s\n' "$*" >&2; exit 64 ;;
         esac
         ;;
@@ -227,55 +215,56 @@ case "$1" in
   pm)
     case "${2:-}" in
       help)
-        value=${FAKE_PM_HELP:-'install-existing --user USER_ID PACKAGE'}
+        value=${FAKE_PM_HELP:-'disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+enable [--user USER_ID] PACKAGE_OR_COMPONENT'}
         ;;
       list)
         [ "${3:-}" = "packages" ] || { printf 'unsupported fake pm list: %s\n' "$*" >&2; exit 64; }
         case "${4:-}" in
-          '') value=$(package_list active) ;;
+          ''|-e) value=$(package_list enabled) ;;
           -u) value=$(package_list all) ;;
           -d) value=$(package_list disabled) ;;
           *) printf 'unsupported fake pm list packages flag: %s\n' "${4:-}" >&2; exit 64 ;;
         esac
         ;;
-      install-existing)
+      enable)
         [ "${3:-}" = "--user" ] && [ "${4:-}" = "0" ] && [ -n "${5:-}" ] || {
-          printf 'invalid fake pm install-existing command: %s\n' "$*" >&2
+          printf 'invalid fake pm enable command: %s\n' "$*" >&2
           exit 64
         }
-        if [ "${FAKE_INSTALL_EXISTING_FAIL_PACKAGE:-}" = "${5}" ]; then
-          printf '%s\n' 'Failure [restore failed]'
+        if [ "${FAKE_ENABLE_FAIL_PACKAGE:-}" = "${5}" ]; then
+          printf '%s\n' 'Error: could not enable package'
           exit 1
         fi
         replace_package_state "${5}" active
-        value="installed ${5}"
+        value="Package ${5} new state: default"
         ;;
-      uninstall)
-        [ "${3:-}" = "-k" ] && [ "${4:-}" = "--user" ] && [ "${5:-}" = "0" ] && [ -n "${6:-}" ] || {
-          printf 'invalid fake pm uninstall command: %s\n' "$*" >&2
+      disable-user)
+        [ "${3:-}" = "--user" ] && [ "${4:-}" = "0" ] && [ -n "${5:-}" ] || {
+          printf 'invalid fake pm disable-user command: %s\n' "$*" >&2
           exit 64
         }
-        package=${6}
-        if [ "${FAKE_UNINSTALL_MODE:-}" = error ] || [ "${FAKE_UNINSTALL_FAIL_PACKAGE:-}" = "$package" ]; then
-          printf '%s\n' 'Failure [not installed for 0]'
+        package=${5}
+        if [ "${FAKE_DISABLE_MODE:-}" = error ] || [ "${FAKE_DISABLE_FAIL_PACKAGE:-}" = "$package" ]; then
+          printf '%s\n' 'Error: could not disable package'
           exit 1
         fi
         if [ -n "${FAKE_REQUIRED_JOURNAL:-}" ]; then
           grep -Fx "attempt $package" "$FAKE_REQUIRED_JOURNAL" >/dev/null || {
-            printf '%s\n' 'uninstall was called before its attempt was journaled' >&2
+            printf '%s\n' 'disable-user was called before its attempt was journaled' >&2
             exit 1
           }
           if [ "$package" != com.amazon.android.marketplace ] && [ -n "${FAKE_REQUIRED_JOURNAL_RESULT:-}" ]; then
             grep -Fx "$FAKE_REQUIRED_JOURNAL_RESULT" "$FAKE_REQUIRED_JOURNAL" >/dev/null || {
-              printf '%s\n' 'next uninstall was called before the previous result was journaled' >&2
+              printf '%s\n' 'next disable-user was called before the previous result was journaled' >&2
               exit 1
             }
           fi
         fi
-        case "${FAKE_UNINSTALL_MODE:-}" in
-          still-active) ;;
-          missing-uninstalled) replace_package_state "$package" missing ;;
-          *) replace_package_state "$package" uninstalled ;;
+        case "${FAKE_DISABLE_MODE:-}" in
+          still-enabled|silent-no-effect) ;;
+          missing-disabled) replace_package_state "$package" missing ;;
+          *) replace_package_state "$package" disabled ;;
         esac
         if [ -n "${FAKE_INTERRUPT_MARKER:-}" ]; then
           : > "$FAKE_INTERRUPT_MARKER"
@@ -283,7 +272,10 @@ case "$1" in
             sleep 1
           done
         fi
-        value=${FAKE_UNINSTALL_RESULT:-Success}
+        case "${FAKE_DISABLE_MODE:-}" in
+          silent-no-effect) value= ;;
+          *) value=${FAKE_DISABLE_RESULT:-"Package $package new state: disabled-user"} ;;
+        esac
         ;;
       *) printf 'unsupported fake pm command: %s\n' "$*" >&2; exit 64 ;;
     esac

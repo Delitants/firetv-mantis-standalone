@@ -2,7 +2,7 @@
 
 An intentionally narrow, recovery-first controller for the exact Amazon
 `mantis/AFTMM` Fire OS target documented in `docs/MODEL-SAFETY.md`. It audits,
-plans reversible user-zero package removals, verifies a pinned Wolf Launcher,
+plans reversible per-user package disables, verifies a pinned Wolf Launcher,
 and refuses operations outside that boundary.
 
 `ROOT=NOT_ACHIEVED`: this project has no root, partition, recovery, or system
@@ -17,3 +17,9 @@ Settings routes and backs out; it never writes a setting. See
 The project is English and locale-neutral. A stock Language-screen selection is
 optional and manual; the observed target did not offer Ukrainian and records
 `UKRAINIAN_LOCALE=UNAVAILABLE`.
+
+The package operation is `pm disable-user --user 0`; recovery is
+`pm enable --user 0`. Apps remain installed in the system image. The
+controller will not apply unless `pm help` proves both exact command forms,
+and it verifies every transition with the enabled (`-e`) and disabled (`-d`)
+package inventories.

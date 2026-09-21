@@ -30,9 +30,9 @@ unset FAKE_RELEASE FAKE_SDK FAKE_ABI FAKE_UNAME FAKE_ENFORCE FAKE_UID
 unset FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES FAKE_HOME FAKE_BLUETOOTH_ON FAKE_TUN0
 unset FAKE_ADB_ENABLED FAKE_DEVELOPMENT_SETTINGS_ENABLED FAKE_PERSIST_USB_CONFIG FAKE_SYS_USB_CONFIG
 unset FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT FAKE_ADBD_PID FAKE_INIT_SVC_ADBD FAKE_ALWAYS_ON_VPN_APP
-unset FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_PACKAGE_STATE FAKE_UNINSTALL_MODE FAKE_UNINSTALL_FAIL_PACKAGE
-unset FAKE_AFTER_UNINSTALL_ADB_ENABLED FAKE_UNINSTALL_RESULT
-unset FAKE_AFTER_UNINSTALL_ADB_ENABLED_AFTER_COUNT FAKE_INSTALL_EXISTING_FAIL_PACKAGE
+unset FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_PACKAGE_STATE FAKE_DISABLE_MODE FAKE_DISABLE_FAIL_PACKAGE
+unset FAKE_AFTER_DISABLE_ADB_ENABLED FAKE_DISABLE_RESULT FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT
+unset FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT FAKE_ENABLE_FAIL_PACKAGE
 unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
@@ -195,12 +195,14 @@ prepare_package_state() {
     done < "$preserve_manifest"
   done
   printf '%s\n' 'active com.amazon.android.marketplace' 'active com.amazon.bueller.music' >> "$FAKE_PACKAGE_STATE"
-  unset FAKE_UNINSTALL_MODE FAKE_UNINSTALL_FAIL_PACKAGE FAKE_AFTER_UNINSTALL_ADB_ENABLED FAKE_UNINSTALL_RESULT
-  unset FAKE_AFTER_UNINSTALL_ADB_ENABLED_AFTER_COUNT FAKE_INSTALL_EXISTING_FAIL_PACKAGE
+  unset FAKE_DISABLE_MODE FAKE_DISABLE_FAIL_PACKAGE FAKE_AFTER_DISABLE_ADB_ENABLED FAKE_DISABLE_RESULT
+  unset FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT FAKE_ENABLE_FAIL_PACKAGE
   unset FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT
   unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP
   unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
 }
+
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 32 ] || fail 'remove-user0.txt must contain exactly 32 packages'
 
 set_wolf_ready() {
   export FAKE_WOLF_INSTALLED_VERSION_CODE=11900120
@@ -263,14 +265,15 @@ AUDIT_DIR="$TEST_TMP/audit"
 run_tool --output "$AUDIT_DIR" audit || fail "audit publication failed: $ERR"
 VERIFY_BASELINE=$AUDIT_DIR
 assert_file "$AUDIT_DIR/device.txt"
-assert_file "$AUDIT_DIR/packages-active.txt"
-assert_file "$AUDIT_DIR/packages-uninstalled.txt"
+assert_file "$AUDIT_DIR/packages-enabled.txt"
+assert_file "$AUDIT_DIR/packages-disabled.txt"
 assert_file "$AUDIT_DIR/protected-apps.txt"
 assert_file "$AUDIT_DIR/restore-user0.sh"
 assert_file "$AUDIT_DIR/SHA256SUMS"
 sh -n "$AUDIT_DIR/restore-user0.sh" || fail 'generated restore script is invalid shell'
 verify_checksums "$AUDIT_DIR" || fail 'audit checksum verification failed'
-assert_contains "$OUT" 'RESTORE_CAPABILITY=cmd'
+assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
+assert_contains "$OUT" 'PACKAGE_RESTORE=pm enable --user 0'
 assert_contains "$OUT" 'AUDIT=PASS'
 assert_contains "$(cat "$AUDIT_DIR/device.txt")" 'persist.sys.locale=en-US'
 assert_contains "$(cat "$AUDIT_DIR/device.txt")" 'system_locales=en-US'
@@ -376,46 +379,72 @@ assert_contains "$(cat "$REPLACED_SOURCE/keep.txt")" 'unrelated replacement cont
 LINUX_STRATEGY=$(python3 "$ROOT/scripts/atomic-rename.py" strategy linux) || fail 'Linux atomic rename strategy is unavailable'
 assert_contains "$LINUX_STRATEGY" 'linux: renameat2(RENAME_NOREPLACE)'
 
-# Break caught: preferring a cmd form that does not prove --user support.
+# Break caught: accepting only one half of the disable/enable capability pair.
 PM_AUDIT_DIR="$TEST_TMP/audit-pm"
-FAKE_CMD_PACKAGE_HELP='install-existing PACKAGE' FAKE_PM_HELP='install-existing --user USER_ID PACKAGE' \
-  run_tool --output "$PM_AUDIT_DIR" audit || fail "pm fallback audit failed: $ERR"
-assert_contains "$OUT" 'RESTORE_CAPABILITY=pm'
-printf '%s\n' com.example.first com.example.second > "$PM_AUDIT_DIR/removed-successfully.txt"
+FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+  run_tool --output "$PM_AUDIT_DIR" audit || fail "pm capability audit failed: $ERR"
+assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
+assert_contains "$OUT" 'PACKAGE_RESTORE=pm enable --user 0'
+FAKE_PACKAGE_STATE="$TEST_TMP/generated-restore-state"
+export FAKE_PACKAGE_STATE
+printf '%s\n' 'disabled com.amazon.android.marketplace' 'disabled com.amazon.bueller.music' > "$FAKE_PACKAGE_STATE"
+printf '%s\n' com.amazon.android.marketplace com.amazon.bueller.music > "$PM_AUDIT_DIR/disabled-successfully.txt"
+refresh_checksums "$PM_AUDIT_DIR"
 : > "$FAKE_ADB_LOG"
 SERIAL=test-serial ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err" ||
   fail "generated pm restore failed: $(cat "$TEST_TMP/restore-err")"
 RESTORE_LOG=$(cat "$FAKE_ADB_LOG")
-assert_contains "$RESTORE_LOG" 'shell pm install-existing --user 0 com.example.second'
-assert_contains "$RESTORE_LOG" 'shell pm install-existing --user 0 com.example.first'
+assert_contains "$RESTORE_LOG" 'shell pm enable --user 0 com.amazon.bueller.music'
+assert_contains "$RESTORE_LOG" 'shell pm enable --user 0 com.amazon.android.marketplace'
 case "$RESTORE_LOG" in
-  *com.example.removed*) fail 'restore used the package inventory instead of the removal journal' ;;
+  *com.example.removed*) fail 'restore used the package inventory instead of the successful-disable journal' ;;
 esac
+# Break caught: the generated recovery script must not enable an already-enabled
+# package merely because an old checksummed ledger still names it.
+: > "$FAKE_ADB_LOG"
+if SERIAL=test-serial ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err"; then
+  fail 'generated restore accepted packages that were no longer disabled'
+fi
+assert_contains "$(cat "$TEST_TMP/restore-err")" 'restore precondition failed'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0'
+
+# Break caught: recomputing checksums must not expand the generated script's
+# embedded candidate-package boundary.
+printf '%s\n' com.example.untrusted > "$PM_AUDIT_DIR/disabled-successfully.txt"
+refresh_checksums "$PM_AUDIT_DIR"
+: > "$FAKE_ADB_LOG"
+if SERIAL=test-serial ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err"; then
+  fail 'generated restore accepted a non-manifest package'
+fi
+assert_contains "$(cat "$TEST_TMP/restore-err")" 'invalid recorded package'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0'
 : > "$FAKE_ADB_LOG"
 if FAKE_RELEASE=7.1.3 SERIAL=test-serial ADB="$ROOT/tests/fixtures/adb" "$PM_AUDIT_DIR/restore-user0.sh" >"$TEST_TMP/restore-out" 2>"$TEST_TMP/restore-err"; then
   fail 'restore accepted a different Android release'
 fi
 assert_contains "$(cat "$TEST_TMP/restore-err")" 'ro.build.version.release expected=7.1.2 actual=7.1.3'
 case "$(cat "$FAKE_ADB_LOG")" in
-  *install-existing*) fail 'restore attempted installation on a mismatched target' ;;
+  *'pm enable'*) fail 'restore attempted enable on a mismatched target' ;;
 esac
 
-# Break caught: planning a removal must expose the exact inverse without changing user 0.
+# Break caught: planning a disable must expose the exact inverse without changing user 0.
 PACKAGE_ORIGINAL_REMOVE="$TEST_TMP/remove-user0-package-operations.txt"
 cp "$MANIFEST_REMOVE" "$PACKAGE_ORIGINAL_REMOVE"
 printf '%s\n' com.amazon.android.marketplace com.amazon.bueller.music > "$MANIFEST_REMOVE"
 prepare_package_state
 set_wolf_ready
 run_tool plan || fail "plan failed for valid package operations: $ERR"
-assert_contains "$OUT" 'REMOVE=com.amazon.android.marketplace RESTORE=cmd package install-existing --user 0 com.amazon.android.marketplace'
-assert_contains "$OUT" 'REMOVE=com.amazon.bueller.music RESTORE=cmd package install-existing --user 0 com.amazon.bueller.music'
-assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'uninstall -k --user 0'
+assert_contains "$OUT" 'DISABLE=com.amazon.android.marketplace RESTORE=pm enable --user 0 com.amazon.android.marketplace'
+assert_contains "$OUT" 'DISABLE=com.amazon.bueller.music RESTORE=pm enable --user 0 com.amazon.bueller.music'
+assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
 
 # Break caught: a compact guard that omits any preserve manifest package can remove user apps after core recovery paths are already gone.
 PACKAGE_TCOMM_GUARD_DIR="$TEST_TMP/apply-tcomm-guard"
 prepare_package_state
 awk '
-  $1 == "active" && $2 == "com.amazon.tcomm" { print "uninstalled", $2; next }
+  $1 == "active" && $2 == "com.amazon.tcomm" { print "disabled", $2; next }
   { print }
 ' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
 mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
@@ -423,8 +452,8 @@ set_wolf_ready
 if run_tool --output "$PACKAGE_TCOMM_GUARD_DIR" --yes apply; then
   fail 'apply accepted a missing mandatory preserve package'
 fi
-assert_contains "$ERR" 'guard missing active package: com.amazon.tcomm'
-assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'uninstall -k --user 0'
+assert_contains "$ERR" 'guard missing enabled package: com.amazon.tcomm'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
 
 # Break caught: any alternate HOME resolver can replace the stock recovery route.
 PACKAGE_HOME_GUARD_DIR="$TEST_TMP/apply-home-guard"
@@ -434,21 +463,21 @@ if FAKE_HOME_RESOLVER='com.example.launcher/.Home' run_tool --output "$PACKAGE_H
   fail 'apply accepted a non-stock HOME resolver'
 fi
 assert_contains "$ERR" 'guard HOME resolver expected=com.amazon.tv.launcher/.HomeActivity actual=com.example.launcher/.Home'
-assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'uninstall -k --user 0'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
 
-# Break caught: accepting a nonliteral uninstall response or a package that remains active.
+# Break caught: accepting a successful command that leaves a package enabled.
 PACKAGE_STILL_ACTIVE_DIR="$TEST_TMP/apply-still-active"
 prepare_package_state
 set_wolf_ready
-FAKE_UNINSTALL_MODE=still-active run_tool --output "$PACKAGE_STILL_ACTIVE_DIR" --yes apply &&
-  fail 'apply accepted Success while the package remained active'
-assert_contains "$ERR" 'removal verification failed for com.amazon.android.marketplace'
+FAKE_DISABLE_MODE=still-enabled run_tool --output "$PACKAGE_STILL_ACTIVE_DIR" --yes apply &&
+  fail 'apply accepted a package that remained enabled'
+assert_contains "$ERR" 'disable verification failed for com.amazon.android.marketplace'
 assert_contains "$(cat "$PACKAGE_STILL_ACTIVE_DIR/operation-journal.txt")" 'attempt com.amazon.android.marketplace'
 assert_contains "$(cat "$PACKAGE_STILL_ACTIVE_DIR/operation-journal.txt")" 'failure com.amazon.android.marketplace'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
 
 # Break caught: an empty persistent TCP property is a valid captured baseline,
-# but it must remain unchanged after every user-zero removal.
+# but it must remain unchanged after every user-zero disable.
 PACKAGE_EMPTY_PORT_DIR="$TEST_TMP/apply-empty-persist-port"
 prepare_package_state
 set_wolf_ready
@@ -457,62 +486,57 @@ FAKE_PERSIST_ADB_TCP_PORT= run_tool --output "$PACKAGE_EMPTY_PORT_DIR" --yes app
 prepare_package_state
 set_wolf_ready
 PACKAGE_CHANGED_PORT_DIR="$TEST_TMP/apply-changed-persist-port"
-if FAKE_PERSIST_ADB_TCP_PORT= FAKE_AFTER_UNINSTALL_PERSIST_ADB_TCP_PORT=5555 \
+if FAKE_PERSIST_ADB_TCP_PORT= FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT=5555 \
   run_tool --output "$PACKAGE_CHANGED_PORT_DIR" --yes apply; then
-  fail 'apply accepted a changed persistent TCP port after removal'
+  fail 'apply accepted a changed persistent TCP port after disable'
 fi
 assert_contains "$ERR" 'guard changed persist_adb_tcp_port expected= actual=5555'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
 
-# Break caught: accepting a nonliteral Success response makes failed removals look safe.
+# Break caught: a silent successful disable that has no state effect is rejected.
 PACKAGE_NONLITERAL_DIR="$TEST_TMP/apply-nonliteral"
 prepare_package_state
 set_wolf_ready
-FAKE_UNINSTALL_RESULT='Success with trailing text' run_tool --output "$PACKAGE_NONLITERAL_DIR" --yes apply &&
-  fail 'apply accepted a nonliteral uninstall response'
-assert_contains "$ERR" 'removal failed for com.amazon.android.marketplace'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+FAKE_DISABLE_MODE=silent-no-effect run_tool --output "$PACKAGE_NONLITERAL_DIR" --yes apply &&
+  fail 'apply accepted a silent disable with no state effect'
+assert_contains "$ERR" 'disable verification failed for com.amazon.android.marketplace'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
 
-# Break caught: a later uninstall error must restore the current batch in reverse order.
+# Break caught: a later disable error must restore the current batch in reverse order.
 PACKAGE_ERROR_DIR="$TEST_TMP/apply-error"
 prepare_package_state
 set_wolf_ready
-FAKE_UNINSTALL_FAIL_PACKAGE=com.amazon.bueller.music run_tool --output "$PACKAGE_ERROR_DIR" --yes apply &&
-  fail 'apply accepted a failed uninstall'
-assert_contains "$ERR" 'removal failed for com.amazon.bueller.music'
+FAKE_DISABLE_FAIL_PACKAGE=com.amazon.bueller.music run_tool --output "$PACKAGE_ERROR_DIR" --yes apply &&
+  fail 'apply accepted a failed disable'
+assert_contains "$ERR" 'disable failed for com.amazon.bueller.music'
 ERROR_LOG=$(cat "$FAKE_ADB_LOG")
-assert_contains "$ERROR_LOG" 'shell cmd package install-existing --user 0 com.amazon.bueller.music'
-assert_contains "$ERROR_LOG" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
-awk '
-  /install-existing --user 0 com.amazon.bueller.music/ { current = NR }
-  /install-existing --user 0 com.amazon.android.marketplace/ { previous = NR }
-  END { exit !(current && previous && current < previous) }
-' "$FAKE_ADB_LOG" || fail 'rollback was not in reverse package order'
+assert_not_contains "$ERROR_LOG" 'shell pm enable --user 0 com.amazon.bueller.music'
+assert_contains "$ERROR_LOG" 'shell pm enable --user 0 com.amazon.android.marketplace'
 
-# Break caught: an already absent user-0 package must be skipped and omitted from rollback.
+# Break caught: an already-disabled user-0 package must be skipped and omitted from rollback.
 PACKAGE_ABSENT_DIR="$TEST_TMP/apply-absent"
 prepare_package_state
 awk '
-  $1 == "active" && $2 == "com.amazon.android.marketplace" { print "uninstalled", $2; next }
+  $1 == "active" && $2 == "com.amazon.android.marketplace" { print "disabled", $2; next }
   { print }
 ' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
 mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
 set_wolf_ready
-run_tool --output "$PACKAGE_ABSENT_DIR" --yes apply || fail "apply failed for an absent package: $ERR"
+run_tool --output "$PACKAGE_ABSENT_DIR" --yes apply || fail "apply failed for an already-disabled package: $ERR"
 assert_contains "$(cat "$PACKAGE_ABSENT_DIR/operation-journal.txt")" 'skip com.amazon.android.marketplace'
-assert_not_contains "$(cat "$PACKAGE_ABSENT_DIR/removed-successfully.txt")" 'com.amazon.android.marketplace'
-assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'uninstall -k --user 0 com.amazon.android.marketplace'
+assert_not_contains "$(cat "$PACKAGE_ABSENT_DIR/disabled-successfully.txt")" 'com.amazon.android.marketplace'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0 com.amazon.android.marketplace'
 
-# Break caught: a package that vanishes from the all-users inventory has no safe rollback proof.
+# Break caught: a disabled package must appear in the disabled package inventory.
 PACKAGE_MISSING_U_DIR="$TEST_TMP/apply-missing-u"
 prepare_package_state
 set_wolf_ready
-FAKE_UNINSTALL_MODE=missing-uninstalled run_tool --output "$PACKAGE_MISSING_U_DIR" --yes apply &&
-  fail 'apply accepted a package missing from pm list packages -u'
-assert_contains "$ERR" 'removal verification failed for com.amazon.android.marketplace'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+FAKE_DISABLE_MODE=missing-disabled run_tool --output "$PACKAGE_MISSING_U_DIR" --yes apply &&
+  fail 'apply accepted a package missing from pm list packages -d'
+assert_contains "$ERR" 'disable verification failed for com.amazon.android.marketplace'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
 
-# Break caught: interruption recovery needs the attempt durable before adb, and each result before the next removal.
+# Break caught: interruption recovery needs the attempt durable before adb, and each result before the next disable.
 PACKAGE_JOURNAL_DIR="$TEST_TMP/apply-journal"
 prepare_package_state
 set_wolf_ready
@@ -526,16 +550,16 @@ assert_contains "$JOURNAL" 'attempt com.amazon.bueller.music'
 assert_contains "$JOURNAL" 'success com.amazon.bueller.music'
 verify_checksums "$PACKAGE_JOURNAL_DIR" || fail 'apply did not retain checksummed journal and rollback state'
 
-# Break caught: interruption after uninstall but before a success ledger entry must remain recoverable from its durable attempt.
+# Break caught: interruption after disable but before a success ledger entry must remain recoverable from its durable attempt.
 PACKAGE_INTERRUPT_DIR="$TEST_TMP/apply-interrupted"
 prepare_package_state
 set_wolf_ready
-FAKE_INTERRUPT_MARKER="$TEST_TMP/interrupt-after-uninstall" \
+FAKE_INTERRUPT_MARKER="$TEST_TMP/interrupt-after-disable" \
   run_tool_interrupted --output "$PACKAGE_INTERRUPT_DIR" --yes apply || true
 assert_contains "$(cat "$PACKAGE_INTERRUPT_DIR/operation-journal.txt")" 'attempt com.amazon.android.marketplace'
-assert_not_contains "$(cat "$PACKAGE_INTERRUPT_DIR/removed-successfully.txt")" 'com.amazon.android.marketplace'
-run_tool restore "$PACKAGE_INTERRUPT_DIR" || fail "restore did not reconcile an interrupted uninstall: $ERR"
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+assert_not_contains "$(cat "$PACKAGE_INTERRUPT_DIR/disabled-successfully.txt")" 'com.amazon.android.marketplace'
+run_tool restore "$PACKAGE_INTERRUPT_DIR" || fail "restore did not reconcile an interrupted disable: $ERR"
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
 assert_file "$PACKAGE_INTERRUPT_DIR/reconciliation-journal.txt"
 assert_contains "$(cat "$PACKAGE_INTERRUPT_DIR/reconciliation-journal.txt")" 'reconciled com.amazon.android.marketplace'
 verify_checksums "$PACKAGE_INTERRUPT_DIR" || fail 'interruption reconciliation left stale checksums'
@@ -552,11 +576,11 @@ refresh_checksums "$PACKAGE_TRUST_DIR"
 run_tool restore "$PACKAGE_TRUST_DIR" || fail "controller restore rejected a checksummed backup: $ERR"
 [ ! -e "$SCRIPT_MARKER" ] || fail 'public restore executed untrusted backup shell'
 RESTORE_LOG=$(cat "$FAKE_ADB_LOG")
-assert_contains "$RESTORE_LOG" 'shell cmd package install-existing --user 0 com.amazon.bueller.music'
-assert_contains "$RESTORE_LOG" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+assert_contains "$RESTORE_LOG" 'shell pm enable --user 0 com.amazon.bueller.music'
+assert_contains "$RESTORE_LOG" 'shell pm enable --user 0 com.amazon.android.marketplace'
 awk '
-  /install-existing --user 0 com.amazon.bueller.music/ { second = NR }
-  /install-existing --user 0 com.amazon.android.marketplace/ { first = NR }
+  /pm enable --user 0 com.amazon.bueller.music/ { second = NR }
+  /pm enable --user 0 com.amazon.android.marketplace/ { first = NR }
   END { exit !(second && first && second < first) }
 ' "$FAKE_ADB_LOG" || fail 'public restore did not use reverse order'
 
@@ -565,40 +589,72 @@ PACKAGE_STALE_DIR="$TEST_TMP/apply-restore-stale"
 prepare_package_state
 set_wolf_ready
 run_tool --output "$PACKAGE_STALE_DIR" --yes apply || fail "apply failed for stale-journal test: $ERR"
-printf '%s\n' com.example.untrusted > "$PACKAGE_STALE_DIR/removed-successfully.txt"
+printf '%s\n' com.example.untrusted > "$PACKAGE_STALE_DIR/disabled-successfully.txt"
 if run_tool restore "$PACKAGE_STALE_DIR"; then
   fail 'restore accepted a journal whose SHA256SUMS did not match'
 fi
 assert_contains "$ERR" 'backup integrity verification failed'
-assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'install-existing'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm enable'
+
+# Break caught: a checksummed backup from any other operation mode must not be
+# interpreted as a disable/enable ledger, even if its checksums are recomputed.
+PACKAGE_MODE_DIR="$TEST_TMP/apply-restore-mode"
+prepare_package_state
+set_wolf_ready
+run_tool --output "$PACKAGE_MODE_DIR" --yes apply || fail "apply failed for package-mode test: $ERR"
+printf '%s\n' 'PACKAGE_OPERATION=unsupported' 'PACKAGE_RESTORE=unsupported' > "$PACKAGE_MODE_DIR/package-mode.txt"
+refresh_checksums "$PACKAGE_MODE_DIR"
+if run_tool restore "$PACKAGE_MODE_DIR"; then
+  fail 'restore accepted a backup from a different package-operation mode'
+fi
+assert_contains "$ERR" 'backup package mode mismatch'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm enable'
+
+# Break caught: public restore must not invoke enable for a ledger package that
+# is no longer observed in the disabled inventory.
+PACKAGE_PRECONDITION_DIR="$TEST_TMP/apply-restore-precondition"
+prepare_package_state
+set_wolf_ready
+run_tool --output "$PACKAGE_PRECONDITION_DIR" --yes apply || fail "apply failed for restore-precondition test: $ERR"
+awk '
+  $1 == "disabled" && $2 == "com.amazon.android.marketplace" { print "active", $2; next }
+  { print }
+' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
+if run_tool restore "$PACKAGE_PRECONDITION_DIR"; then
+  fail 'public restore enabled a ledger package that was not disabled'
+fi
+assert_contains "$ERR" 'restore precondition failed for com.amazon.android.marketplace'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
 
 # Break caught: a wrong-device restore is refused before reconciliation or package installation.
 if FAKE_RELEASE=7.1.3 run_tool restore "$PACKAGE_JOURNAL_DIR"; then
   fail 'public restore accepted the wrong device'
 fi
 assert_contains "$ERR" 'release expected=7.1.2 actual=7.1.3'
-assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'install-existing'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm enable'
 unset FAKE_RELEASE
 
-# Break caught: losing ADB Debugging after an uninstall must trigger rollback while the transport remains live.
+# Break caught: losing ADB Debugging after a disable must trigger rollback while the transport remains live.
 PACKAGE_ADB_GUARD_DIR="$TEST_TMP/apply-adb-guard"
 prepare_package_state
 set_wolf_ready
-FAKE_AFTER_UNINSTALL_ADB_ENABLED=0 run_tool --output "$PACKAGE_ADB_GUARD_DIR" --yes apply &&
+FAKE_AFTER_DISABLE_ADB_ENABLED=0 run_tool --output "$PACKAGE_ADB_GUARD_DIR" --yes apply &&
   fail 'apply accepted a changed adb_enabled setting'
 assert_contains "$ERR" 'guard changed adb_enabled'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'get-state'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
+assert_contains "$(cat "$PACKAGE_ADB_GUARD_DIR/operation-journal.txt")" 'guard-failure com.amazon.android.marketplace'
 
 # Break caught: a partial rollback must remove each confirmed restore from the ledger and refresh the checksum before trying the next one.
 PACKAGE_PARTIAL_ROLLBACK_DIR="$TEST_TMP/apply-partial-rollback"
 prepare_package_state
 set_wolf_ready
-FAKE_AFTER_UNINSTALL_ADB_ENABLED=0 \
-FAKE_AFTER_UNINSTALL_ADB_ENABLED_AFTER_COUNT=2 \
-FAKE_INSTALL_EXISTING_FAIL_PACKAGE=com.amazon.android.marketplace \
+FAKE_AFTER_DISABLE_ADB_ENABLED=0 \
+FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT=2 \
+FAKE_ENABLE_FAIL_PACKAGE=com.amazon.android.marketplace \
   run_tool --output "$PACKAGE_PARTIAL_ROLLBACK_DIR" --yes apply && fail 'apply accepted a partial rollback'
-PARTIAL_LEDGER=$(cat "$PACKAGE_PARTIAL_ROLLBACK_DIR/removed-successfully.txt")
+PARTIAL_LEDGER=$(cat "$PACKAGE_PARTIAL_ROLLBACK_DIR/disabled-successfully.txt")
 assert_contains "$PARTIAL_LEDGER" 'com.amazon.android.marketplace'
 assert_not_contains "$PARTIAL_LEDGER" 'com.amazon.bueller.music'
 verify_checksums "$PACKAGE_PARTIAL_ROLLBACK_DIR" || fail 'partial rollback left stale checksums'
@@ -607,34 +663,37 @@ clear_wolf_ready
 unset FAKE_PACKAGE_STATE FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT
 cp "$PACKAGE_ORIGINAL_REMOVE" "$MANIFEST_REMOVE"
 
-# Break caught: treating prose or similarly named commands as a rollback form.
+# Break caught: treating prose or similarly named commands as disable/enable usage.
 MISLEADING_AUDIT_DIR="$TEST_TMP/audit-misleading-help"
-FAKE_CMD_PACKAGE_HELP='Use install-existing --user only after a warning' \
-  FAKE_PM_HELP='install-existing-extra --user USER_ID PACKAGE' \
+FAKE_PM_HELP='Use disable-user and enable --user only after a warning' \
   run_tool --output "$MISLEADING_AUDIT_DIR" audit || fail "misleading help audit failed: $ERR"
-assert_contains "$OUT" 'RESTORE_CAPABILITY=none'
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
 INCOMPLETE_HELP_AUDIT_DIR="$TEST_TMP/audit-incomplete-help"
-FAKE_CMD_PACKAGE_HELP='install-existing --user' FAKE_PM_HELP='install-existing --user' \
+FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT' \
   run_tool --output "$INCOMPLETE_HELP_AUDIT_DIR" audit || fail "incomplete help audit failed: $ERR"
-assert_contains "$OUT" 'RESTORE_CAPABILITY=none'
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
 NON_USAGE_HELP_AUDIT_DIR="$TEST_TMP/audit-non-usage-help"
-FAKE_CMD_PACKAGE_HELP='install-existing --user USER_ID explanatory-text' \
-  FAKE_PM_HELP='install-existing --user USER_ID explanatory-text' \
+FAKE_PM_HELP='disable-user --user USER_ID explanatory-text
+enable --user USER_ID explanatory-text' \
   run_tool --output "$NON_USAGE_HELP_AUDIT_DIR" audit || fail "non-usage help audit failed: $ERR"
-assert_contains "$OUT" 'RESTORE_CAPABILITY=none'
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
 TRAILING_PROSE_HELP_AUDIT_DIR="$TEST_TMP/audit-trailing-prose-help"
-FAKE_CMD_PACKAGE_HELP='install-existing --user USER_ID PACKAGE explanatory-text' \
-  FAKE_PM_HELP='install-existing --user USER_ID PACKAGE explanatory-text' \
+FAKE_PM_HELP='disable-user --user USER_ID PACKAGE_OR_COMPONENT explanatory-text
+enable --user USER_ID PACKAGE_OR_COMPONENT explanatory-text' \
   run_tool --output "$TRAILING_PROSE_HELP_AUDIT_DIR" audit || fail "trailing prose help audit failed: $ERR"
-assert_contains "$OUT" 'RESTORE_CAPABILITY=none'
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
 
-# Break caught: attempting a user-0 removal without a help-proven rollback path.
-if FAKE_CMD_PACKAGE_HELP='no install commands' FAKE_PM_HELP='no install commands' run_tool --yes apply; then
-  fail 'apply accepted no restore capability'
+# Break caught: attempting a user-0 disable without a help-proven disable/enable pair.
+if FAKE_PM_HELP='no package state commands' run_tool --yes apply; then
+  fail 'apply accepted no disable/enable capability'
 fi
-assert_contains "$ERR" 'no help-proven install-existing command is available'
+assert_contains "$ERR" 'no help-proven pm disable-user/enable commands are available'
 case "$(cat "$FAKE_ADB_LOG")" in
-  *'uninstall -k --user 0'*) fail 'apply attempted removal without restore capability' ;;
+  *'pm disable-user --user 0'*) fail 'apply attempted disable without restore capability' ;;
 esac
 
 if FAKE_MODEL=AFTKA run_tool --yes apply; then
@@ -841,28 +900,28 @@ assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent 3'
 # Break caught: an incomplete preserve manifest is not enough if a required
 # package is absent from the active user-zero package list.
 awk '
-  $1 == "active" && $2 == "com.amazon.tcomm" { print "uninstalled", $2; next }
+  $1 == "active" && $2 == "com.amazon.tcomm" { print "disabled", $2; next }
   { print }
 ' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
 mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
 if run_verify; then
   fail 'verify accepted a missing mandatory preserve package'
 fi
-assert_contains "$ERR" 'guard missing active package: com.amazon.tcomm'
+assert_contains "$ERR" 'guard missing enabled package: com.amazon.tcomm'
 
 # Break caught: protected applications are mandatory even when their package
 # name appears outside the generic preserve manifests.
 prepare_package_state
 set_wolf_ready
 awk '
-  $1 == "active" && $2 == "com.wireguard.android" { print "uninstalled", $2; next }
+  $1 == "active" && $2 == "com.wireguard.android" { print "disabled", $2; next }
   { print }
 ' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
 mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
 if run_verify; then
   fail 'verify accepted an absent protected application'
 fi
-assert_contains "$ERR" 'guard missing active package: com.wireguard.android'
+assert_contains "$ERR" 'guard missing enabled package: com.wireguard.android'
 
 # Break caught: Bluetooth and the exact Wolf launcher identity are recovery
 # gates, not merely install history.
@@ -1033,6 +1092,8 @@ done
 clear_wolf_ready
 unset FAKE_PACKAGE_STATE FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION
 
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 32 ] || fail 'test run changed the exact 32-package candidate manifest'
+cmp "$ORIGINAL_REMOVE" "$MANIFEST_REMOVE" >/dev/null || fail 'test run changed candidate manifest content'
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 python3 -B "$ROOT/tests/test-atomic-rename.py"
 

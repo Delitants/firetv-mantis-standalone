@@ -215,19 +215,17 @@ require_target() {
   target_matches || { printf '%s\n' 'target gate rejected this device' >&2; exit 1; }
 }
 
-restore_capability() {
-  if read_shell cmd package help && help_proves_install_existing "$ACTUAL"; then
-    RESTORE_CAPABILITY=cmd
-  elif read_shell pm help && help_proves_install_existing "$ACTUAL"; then
-    RESTORE_CAPABILITY=pm
-  else
-    RESTORE_CAPABILITY=none
-  fi
+package_state_capability() {
+  PACKAGE_STATE_CAPABILITY=none
+  read_shell pm help || return 0
+  help_proves_pm_state_command "$ACTUAL" disable-user || return 0
+  help_proves_pm_state_command "$ACTUAL" enable || return 0
+  PACKAGE_STATE_CAPABILITY=pm-disable-enable
 }
 
-help_proves_install_existing() {
-  printf '%s\n' "$1" | awk '
-    $1 == "install-existing" {
+help_proves_pm_state_command() {
+  printf '%s\n' "$1" | awk -v command="$2" '
+    $1 == command {
       usage = 1
       user = 0
       package = 0
@@ -242,8 +240,7 @@ help_proves_install_existing() {
           gsub(/\]$/, "", user)
           if (user == "USER_ID") user = 1
           else usage = 0
-        } else if (token == "--full" || token == "--wait") {
-        } else if (token == "PACKAGE" && field == NF) {
+        } else if ((token == "PACKAGE" || token == "PACKAGE_OR_COMPONENT") && field == NF) {
           package = 1
         } else {
           usage = 0
@@ -340,9 +337,9 @@ EOF
 write_restore_script() {
   audit_file=$1
   capability=$2
+  restore_allowlist=$(awk 'NR == 1 { printf "%s", $0; next } { printf "|%s", $0 }' "$MANIFEST_DIR/remove-user0.txt") || return 1
   case "$capability" in
-    cmd) restore_command='cmd package install-existing' ;;
-    pm) restore_command='pm install-existing' ;;
+    pm-disable-enable) restore_command='pm enable' ;;
     *) restore_command=false ;;
   esac
   cat > "$audit_file" <<EOF
@@ -352,7 +349,27 @@ set -eu
 ADB=\${ADB:-adb}
 : "\${SERIAL:?set SERIAL to the target adb serial}"
 backup_dir=\$(CDPATH= cd -- "\$(dirname "\$0")" && pwd)
-removed_file=\$backup_dir/removed-successfully.txt
+disabled_file=\$backup_dir/disabled-successfully.txt
+mode_file=\$backup_dir/package-mode.txt
+
+(
+  cd "\$backup_dir"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c SHA256SUMS >/dev/null
+  else
+    shasum -a 256 -c SHA256SUMS >/dev/null
+  fi
+) || {
+  printf '%s\n' 'backup integrity verification failed' >&2
+  exit 1
+}
+
+expected_mode='PACKAGE_OPERATION=pm disable-user --user 0
+PACKAGE_RESTORE=pm enable --user 0'
+[ -f "\$mode_file" ] && [ "\$(cat "\$mode_file")" = "\$expected_mode" ] || {
+  printf '%s\n' 'backup package mode mismatch' >&2
+  exit 1
+}
 
 adb_shell() {
   "\$ADB" -s "\$SERIAL" shell "\$@"
@@ -392,15 +409,35 @@ expect_shell getenforce Enforcing getenforce
 expect_shell uid 2000 id -u
 
 restore_package() {
+  enabled=\$(adb_shell pm list packages -e)
+  disabled=\$(adb_shell pm list packages -d)
+  if printf '%s\n' "\$enabled" | grep -Fx "package:\$1" >/dev/null ||
+    ! printf '%s\n' "\$disabled" | grep -Fx "package:\$1" >/dev/null
+  then
+    printf 'restore precondition failed for %s\n' "\$1" >&2
+    return 1
+  fi
   adb_shell $restore_command --user 0 "\$1"
+  enabled=\$(adb_shell pm list packages -e)
+  disabled=\$(adb_shell pm list packages -d)
+  printf '%s\n' "\$enabled" | grep -Fx "package:\$1" >/dev/null
+  if printf '%s\n' "\$disabled" | grep -Fx "package:\$1" >/dev/null; then
+    printf 'restore verification failed for %s\n' "\$1" >&2
+    return 1
+  fi
 }
 
-[ -f "\$removed_file" ] || exit 0
-awk '{ lines[NR] = \$0 } END { for (line = NR; line > 0; line--) print lines[line] }' "\$removed_file" |
+[ -f "\$disabled_file" ] || exit 0
+awk '{ lines[NR] = \$0 } END { for (line = NR; line > 0; line--) print lines[line] }' "\$disabled_file" |
 while IFS= read -r package; do
   case "\$package" in
     ''|*[!A-Za-z0-9._]*)
       printf 'invalid recorded package: %s\\n' "\$package" >&2
+      exit 1
+      ;;
+    $restore_allowlist) ;;
+    *)
+      printf 'invalid recorded package: %s\n' "\$package" >&2
       exit 1
       ;;
   esac
@@ -463,8 +500,8 @@ publish_audit() {
       ;;
   esac
   if ! write_device_snapshot "$work_dir/device.txt" ||
-    ! write_shell_capture "$work_dir/packages-active.txt" pm list packages ||
-    ! write_shell_capture "$work_dir/packages-uninstalled.txt" pm list packages -u ||
+    ! write_shell_capture "$work_dir/packages-enabled.txt" pm list packages -e ||
+    ! write_shell_capture "$work_dir/packages-all.txt" pm list packages -u ||
     ! write_shell_capture "$work_dir/packages-disabled.txt" pm list packages -d ||
     ! cat "$MANIFEST_DIR/preserve-core.txt" "$MANIFEST_DIR/preserve-user-apps.txt" | LC_ALL=C sort -u > "$work_dir/protected-apps.txt" ||
     ! write_shell_capture "$work_dir/home-directory.txt" printenv HOME ||
@@ -473,8 +510,10 @@ publish_audit() {
     ! write_verification_baseline "$work_dir/verification-baseline.txt" ||
     ! write_settings_route_resolvers "$work_dir/settings-route-resolvers.txt" ||
     ! write_shell_capture "$work_dir/home-resolver.txt" cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME ||
-    ! write_restore_script "$work_dir/restore-user0.sh" "$RESTORE_CAPABILITY" ||
-    ! : > "$work_dir/removed-successfully.txt" ||
+    ! printf 'PACKAGE_OPERATION=%s\nPACKAGE_RESTORE=%s\n' \
+      "${PACKAGE_OPERATION:-unsupported}" "${PACKAGE_RESTORE:-unsupported}" > "$work_dir/package-mode.txt" ||
+    ! write_restore_script "$work_dir/restore-user0.sh" "$PACKAGE_STATE_CAPABILITY" ||
+    ! : > "$work_dir/disabled-successfully.txt" ||
     ! : > "$work_dir/operation-journal.txt" ||
     ! checksum_files "$work_dir"
   then
@@ -497,35 +536,53 @@ audit() {
     printf '%s\n' 'SUPPORTED_MUTATION_TARGET=NO'
   fi
   printf '%s\n' 'ROOT=NOT_ACHIEVED'
-  restore_capability
-  printf 'RESTORE_CAPABILITY=%s\n' "$RESTORE_CAPABILITY"
+  package_state_capability
+  if [ "$PACKAGE_STATE_CAPABILITY" = pm-disable-enable ]; then
+    PACKAGE_OPERATION='pm disable-user --user 0'
+    PACKAGE_RESTORE='pm enable --user 0'
+  else
+    PACKAGE_OPERATION=unsupported
+    PACKAGE_RESTORE=unsupported
+  fi
+  printf 'PACKAGE_OPERATION=%s\n' "$PACKAGE_OPERATION"
+  printf 'PACKAGE_RESTORE=%s\n' "$PACKAGE_RESTORE"
   script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
   publish_audit
   printf '%s\n' 'AUDIT=PASS'
 }
 
-require_restore_capability() {
-  restore_capability
-  [ "$RESTORE_CAPABILITY" != none ] || {
-    printf '%s\n' 'no help-proven install-existing command is available' >&2
+require_package_state_capability() {
+  package_state_capability
+  [ "$PACKAGE_STATE_CAPABILITY" = pm-disable-enable ] || {
+    printf '%s\n' 'no help-proven pm disable-user/enable commands are available' >&2
     exit 1
   }
+  PACKAGE_OPERATION='pm disable-user --user 0'
+  PACKAGE_RESTORE='pm enable --user 0'
 }
 
 restore_command() {
-  case "$RESTORE_CAPABILITY" in
-    cmd) printf '%s\n' 'cmd package install-existing' ;;
-    pm) printf '%s\n' 'pm install-existing' ;;
-    *) return 1 ;;
-  esac
+  [ "$PACKAGE_STATE_CAPABILITY" = pm-disable-enable ] || return 1
+  printf '%s\n' 'pm enable'
 }
 
 restore_package() {
-  case "$RESTORE_CAPABILITY" in
-    cmd) adb_shell cmd package install-existing --user 0 "$1" ;;
-    pm) adb_shell pm install-existing --user 0 "$1" ;;
-    *) return 1 ;;
-  esac
+  [ "$PACKAGE_STATE_CAPABILITY" = pm-disable-enable ] || return 1
+  capture_package_state "$1" || return 1
+  if package_list_contains "$PACKAGE_ENABLED" "$1" || ! package_list_contains "$PACKAGE_DISABLED" "$1"; then
+    printf 'restore precondition failed for %s\n' "$1" >&2
+    return 1
+  fi
+  adb_shell pm enable --user 0 "$1" || return 1
+  capture_package_state "$1" || return 1
+  package_list_contains "$PACKAGE_ENABLED" "$1" || {
+    printf 'restore verification failed for %s: not enabled\n' "$1" >&2
+    return 1
+  }
+  if package_list_contains "$PACKAGE_DISABLED" "$1"; then
+    printf 'restore verification failed for %s: still disabled\n' "$1" >&2
+    return 1
+  fi
 }
 
 package_list_contains() {
@@ -535,8 +592,16 @@ package_list_contains() {
 }
 
 active_package_list() {
-  read_shell pm list packages || return 1
+  read_shell pm list packages -e || return 1
   ACTIVE_PACKAGES=$ACTUAL
+}
+
+capture_package_state() {
+  state_package=$1
+  read_shell pm list packages -e || return 1
+  PACKAGE_ENABLED=$ACTUAL
+  read_shell pm list packages -d || return 1
+  PACKAGE_DISABLED=$ACTUAL
 }
 
 require_active_packages() {
@@ -544,7 +609,7 @@ require_active_packages() {
   shift
   for required_package in "$@"; do
     package_list_contains "$active_packages" "$required_package" || {
-      printf 'guard missing active package: %s\n' "$required_package" >&2
+      printf 'guard missing enabled package: %s\n' "$required_package" >&2
       return 1
     }
   done
@@ -556,7 +621,7 @@ require_preserved_active_packages() {
   for preserve_manifest in "$MANIFEST_DIR/preserve-core.txt" "$MANIFEST_DIR/preserve-user-apps.txt"; do
     while IFS= read -r required_package; do
       package_list_contains "$active_packages" "$required_package" || {
-        printf 'guard missing active package: %s\n' "$required_package" >&2
+        printf 'guard missing enabled package: %s\n' "$required_package" >&2
         return 1
       }
     done < "$preserve_manifest"
@@ -1045,7 +1110,7 @@ remove_recorded_package() {
 verify_backup_integrity() {
   backup_dir=$1
   [ -d "$backup_dir" ] && [ ! -L "$backup_dir" ] || return 1
-  for backup_file in device.txt removed-successfully.txt operation-journal.txt SHA256SUMS; do
+  for backup_file in device.txt disabled-successfully.txt operation-journal.txt package-mode.txt SHA256SUMS; do
     [ -f "$backup_dir/$backup_file" ] && [ ! -L "$backup_dir/$backup_file" ] || return 1
   done
   (
@@ -1058,9 +1123,20 @@ verify_backup_integrity() {
   )
 }
 
+validate_backup_mode() {
+  backup_dir=$1
+  expected_mode='PACKAGE_OPERATION=pm disable-user --user 0
+PACKAGE_RESTORE=pm enable --user 0'
+  actual_mode=$(cat "$backup_dir/package-mode.txt") || return 1
+  [ "$actual_mode" = "$expected_mode" ] || {
+    printf '%s\n' 'backup package mode mismatch' >&2
+    return 1
+  }
+}
+
 validate_restore_journal() {
   backup_dir=$1
-  removed_file=$backup_dir/removed-successfully.txt
+  removed_file=$backup_dir/disabled-successfully.txt
   operation_file=$backup_dir/operation-journal.txt
   while IFS= read -r package; do
     validate_recorded_package "$package" || {
@@ -1082,20 +1158,20 @@ validate_restore_journal() {
   done < "$operation_file"
 }
 
-reconcile_attempted_removals() {
+reconcile_attempted_disables() {
   backup_dir=$1
-  removed_file=$backup_dir/removed-successfully.txt
+  removed_file=$backup_dir/disabled-successfully.txt
   operation_file=$backup_dir/operation-journal.txt
   reconciliation_file=$backup_dir/reconciliation-journal.txt
   active_package_list || return 1
-  read_shell pm list packages -u || return 1
-  all_packages=$ACTUAL
+  read_shell pm list packages -d || return 1
+  disabled_packages=$ACTUAL
   : > "$reconciliation_file"
   while IFS=' ' read -r journal_state journal_package journal_extra; do
     [ "$journal_state" = attempt ] || continue
     [ -z "${journal_extra:-}" ] || return 1
     recorded_package_exists "$removed_file" "$journal_package" && continue
-    if ! package_list_contains "$ACTIVE_PACKAGES" "$journal_package" && package_list_contains "$all_packages" "$journal_package"; then
+    if ! package_list_contains "$ACTIVE_PACKAGES" "$journal_package" && package_list_contains "$disabled_packages" "$journal_package"; then
       append_recorded_package "$removed_file" "$journal_package" || return 1
       printf 'reconciled %s\n' "$journal_package" >> "$reconciliation_file"
       refresh_backup_checksums "$backup_dir" || return 1
@@ -1107,11 +1183,13 @@ reconcile_attempted_removals() {
 plan() {
   require_target
   validate_manifests
-  require_restore_capability
+  require_package_state_capability
   plan_restore=$(restore_command)
   script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+  printf 'PACKAGE_OPERATION=%s\n' "$PACKAGE_OPERATION"
+  printf 'PACKAGE_RESTORE=%s\n' "$PACKAGE_RESTORE"
   while IFS= read -r package; do
-    printf 'REMOVE=%s RESTORE=%s --user 0 %s\n' "$package" "$plan_restore" "$package"
+    printf 'DISABLE=%s RESTORE=%s --user 0 %s\n' "$package" "$plan_restore" "$package"
   done < "$MANIFEST_DIR/remove-user0.txt"
   printf '%s\n' 'PLAN=PASS'
 }
@@ -1119,61 +1197,72 @@ plan() {
 apply() {
   require_target
   validate_manifests
-  require_restore_capability
+  require_package_state_capability
   require_wolf_ready || exit 1
   capture_guard_baseline || exit 1
   GUARD_BASELINE_TUN0_STATE=$GUARD_TUN0_STATE
   script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
   publish_audit || exit 1
   backup_dir=$PUBLISHED_AUDIT_DIR
-  removed_file=$backup_dir/removed-successfully.txt
+  removed_file=$backup_dir/disabled-successfully.txt
   journal_file=$backup_dir/operation-journal.txt
   : > "$journal_file"
   refresh_backup_checksums "$backup_dir" || exit 1
   while IFS= read -r package; do
-    active_package_list || { rollback_batch '' "$removed_file" "$journal_file"; exit 1; }
-    if ! package_list_contains "$ACTIVE_PACKAGES" "$package"; then
-      printf 'skip %s\n' "$package" >> "$journal_file"
-      refresh_backup_checksums "$backup_dir" || exit 1
-      continue
+    capture_package_state "$package" || { rollback_batch '' "$removed_file" "$journal_file"; exit 1; }
+    if ! package_list_contains "$PACKAGE_ENABLED" "$package"; then
+      if package_list_contains "$PACKAGE_DISABLED" "$package"; then
+        printf 'skip %s\n' "$package" >> "$journal_file"
+        refresh_backup_checksums "$backup_dir" || exit 1
+        continue
+      fi
+      rollback_batch '' "$removed_file" "$journal_file" || true
+      printf 'candidate package is neither enabled nor disabled: %s\n' "$package" >&2
+      exit 1
+    fi
+    if package_list_contains "$PACKAGE_DISABLED" "$package"; then
+      rollback_batch '' "$removed_file" "$journal_file" || true
+      printf 'candidate package has conflicting enabled/disabled state: %s\n' "$package" >&2
+      exit 1
     fi
     printf 'attempt %s\n' "$package" >> "$journal_file"
     refresh_backup_checksums "$backup_dir" || exit 1
-    if ! read_shell pm uninstall -k --user 0 "$package"; then
+    disable_status=0
+    read_shell pm disable-user --user 0 "$package" || disable_status=$?
+    if ! capture_package_state "$package"; then
+      apply_failed_package=$package
       printf 'failure %s\n' "$package" >> "$journal_file"
-      rollback_batch "$package" "$removed_file" "$journal_file" || true
+      rollback_batch '' "$removed_file" "$journal_file" || true
       refresh_backup_checksums "$backup_dir" || true
-      printf 'removal failed for %s\n' "$package" >&2
+      printf 'could not verify disable state for %s\n' "$apply_failed_package" >&2
       exit 1
     fi
-    if [ "$ACTUAL" != Success ]; then
+    disabled_now=no
+    if ! package_list_contains "$PACKAGE_ENABLED" "$package" && package_list_contains "$PACKAGE_DISABLED" "$package"; then
+      disabled_now=yes
+      append_recorded_package "$removed_file" "$package" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }
+    fi
+    if [ "$disable_status" -ne 0 ]; then
+      apply_failed_package=$package
       printf 'failure %s\n' "$package" >> "$journal_file"
-      rollback_batch "$package" "$removed_file" "$journal_file" || true
+      rollback_batch '' "$removed_file" "$journal_file" || true
       refresh_backup_checksums "$backup_dir" || true
-      printf 'removal failed for %s\n' "$package" >&2
+      printf 'disable failed for %s\n' "$apply_failed_package" >&2
       exit 1
     fi
-    active_package_list || { printf 'failure %s\n' "$package" >> "$journal_file"; rollback_batch "$package" "$removed_file" "$journal_file" || true; refresh_backup_checksums "$backup_dir" || true; exit 1; }
-    if package_list_contains "$ACTIVE_PACKAGES" "$package"; then
+    if [ "$disabled_now" != yes ]; then
+      apply_failed_package=$package
       printf 'failure %s\n' "$package" >> "$journal_file"
-      rollback_batch "$package" "$removed_file" "$journal_file" || true
+      rollback_batch '' "$removed_file" "$journal_file" || true
       refresh_backup_checksums "$backup_dir" || true
-      printf 'removal verification failed for %s\n' "$package" >&2
+      printf 'disable verification failed for %s\n' "$apply_failed_package" >&2
       exit 1
     fi
-    read_shell pm list packages -u || { printf 'failure %s\n' "$package" >> "$journal_file"; rollback_batch "$package" "$removed_file" "$journal_file" || true; refresh_backup_checksums "$backup_dir" || true; exit 1; }
-    if ! package_list_contains "$ACTUAL" "$package"; then
-      printf 'failure %s\n' "$package" >> "$journal_file"
-      rollback_batch "$package" "$removed_file" "$journal_file" || true
-      refresh_backup_checksums "$backup_dir" || true
-      printf 'removal verification failed for %s\n' "$package" >&2
-      exit 1
-    fi
-    append_recorded_package "$removed_file" "$package" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }
     printf 'success %s\n' "$package" >> "$journal_file"
     refresh_backup_checksums "$backup_dir" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }
+    apply_guard_package=$package
     if ! compact_guard; then
-      printf 'guard-failure %s\n' "$package" >> "$journal_file"
+      printf 'guard-failure %s\n' "$apply_guard_package" >> "$journal_file"
       rollback_batch '' "$removed_file" "$journal_file" || true
       refresh_backup_checksums "$backup_dir" || true
       printf '%s\n' 'guard failure restored the current batch while ADB remained reachable' >&2
@@ -1187,12 +1276,13 @@ apply() {
 restore_backup() {
   backup_dir=$COMMAND_ARG
   verify_backup_integrity "$backup_dir" || { printf '%s\n' 'backup integrity verification failed' >&2; exit 1; }
+  validate_backup_mode "$backup_dir" || exit 1
   require_target
   validate_manifests
-  require_restore_capability
+  require_package_state_capability
   validate_restore_journal "$backup_dir" || exit 1
-  reconcile_attempted_removals "$backup_dir" || { printf '%s\n' 'backup reconciliation failed' >&2; exit 1; }
-  removed_file=$backup_dir/removed-successfully.txt
+  reconcile_attempted_disables "$backup_dir" || { printf '%s\n' 'backup reconciliation failed' >&2; exit 1; }
+  removed_file=$backup_dir/disabled-successfully.txt
   rollback_recorded_packages "$removed_file" || { printf '%s\n' 'restore failed before all packages were restored' >&2; exit 1; }
   printf '%s\n' 'RESTORE=PASS'
 }

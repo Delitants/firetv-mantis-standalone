@@ -7,8 +7,10 @@ facts first.
 
 `ROOT=NOT_ACHIEVED` is a required boundary. There is no root, bootloader,
 BootROM, RPMB, recovery, partition, image, or `/system` operation here. The
-controller only uses `pm uninstall -k --user 0` after an audit and a
-help-proven `install-existing` rollback form.
+controller only uses `pm disable-user --user 0` after an audit and only when
+`pm help` proves both that form and the exact `pm enable --user 0` inverse.
+This is a package-manager state change for user 0, not erasure from the system
+image and not root debloating.
 
 Never remove, disable, clear, reinstall, or update the protected user apps:
 `ar.tvplayer.tv`, `com.wireguard.android`, and `tv.sweet.tvplayer`. Preserve

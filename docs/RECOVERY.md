@@ -28,13 +28,34 @@ permission-protected from shell launch on this Fire OS build. Their smoke path
 uses the stock long-press-Home HUD and D-pad navigation; a permission denial is
 expected only for those routes, and a missing rendered hierarchy is a failure.
 
-If the screen is black or the launcher path is unhealthy, stop removals. Keep
-the stock remote path, return to stock Home/Settings, and restore the recorded
-successful-removal ledger in reverse order:
+Audit and plan must both report:
+
+```text
+PACKAGE_OPERATION=pm disable-user --user 0
+PACKAGE_RESTORE=pm enable --user 0
+```
+
+If either line is `unsupported`, stop. The controller requires `pm help` to
+prove both syntaxes. `apply` disables packages for user 0; it does not uninstall
+their APKs or modify the system image. The checksummed backup records only
+candidates whose transition to the disabled inventory was verified. Candidates
+that were already disabled are skipped and are not later enabled by restore.
+
+If the screen is black or the launcher path is unhealthy, stop package actions.
+Keep the stock remote path, return to stock Home/Settings, and restore the
+recorded successful-disable ledger in reverse order:
 
 ```sh
 scripts/mantis-tool.sh --serial SERIAL restore AUDIT_DIRECTORY
 ```
+
+The generated `restore-user0.sh` is a fallback tied to its audit directory. It
+verifies that directory's checksums and package-operation mode, accepts only the
+embedded candidate allowlist, requires each ledger package to be disabled
+before acting, and verifies that it is enabled afterward. The controller
+`restore` command additionally reconciles an interrupted disable and updates
+the checksummed ledger after each successful enable, so prefer it when the
+repository is available.
 
 Do not reboot before pre-reboot verification and a rollback rehearsal. Locale
 is never changed by this controller. If a preferred language is offered, use

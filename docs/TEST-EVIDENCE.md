@@ -6,6 +6,8 @@ APKs, backups, or VPN material.
 
 | Field | Meaning |
 | --- | --- |
+| `PACKAGE_OPERATION=pm disable-user --user 0` | Help-proven reversible per-user disable mode. |
+| `PACKAGE_RESTORE=pm enable --user 0` | Help-proven inverse used only for recorded successful disables. |
 | `VERIFY_GATE=PASS` | Exact target and preservation checks passed. |
 | `SETTINGS_ROUTES=PASS` | Every action resolved to the pinned stock component. |
 | `ADB_PERSISTENCE=PASS` | ADB Debugging, null Developer Options baseline, adbd, USB configuration, TCP port, and TCP transport passed. |
@@ -22,6 +24,17 @@ Accessibility, Display & Sounds, Preferences/Date & Time, and Language rendered
 through stock-menu D-pad navigation after the expected launcher permission
 denial. Wolf `0.1.9-Wolf` was installed and headlessly rendered, but no
 debloat/reboot acceptance is recorded here.
+
+Package tests use the enabled inventory as the operative set and require each
+successful candidate to move into the disabled inventory. They cover missing
+help syntax, already-disabled skips, silent no-effect rejection, interruption
+between disable and journal success, reverse restore, partial enable failure,
+checksum/tamper rejection, and the exact 32-entry candidate manifest. These are
+controller tests, not a claim that a live package transition or reboot passed.
+The same full suite is exercised with the local default `sh` and `/bin/dash`.
+Generated recovery is tested for checksum and mode binding, embedded manifest
+membership, disabled-before/enabled-after state, and refusal to re-enable an
+already-enabled package.
 
 The smoke verifier parses only the current-focus field, waits in bounded steps
 for asynchronous Launcher activity changes, and cleans its temporary hierarchy
