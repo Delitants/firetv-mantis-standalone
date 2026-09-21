@@ -111,6 +111,9 @@ require_network_target() {
     key=${pair%%:*}; expected=${pair#*:}; actual=$(network_read_prop "$key") || return 1
     [ "$actual" = "$expected" ] || { printf 'network target %s expected=%s actual=%s\n' "$key" "$expected" "$actual" >&2; return 1; }
   done
+  primary_serial=$(adb_shell getprop ro.serialno) || return 1
+  network_serial_value=$(network_adb_cmd shell getprop ro.serialno) || return 1
+  [ -n "$primary_serial" ] && [ "$primary_serial" = "$network_serial_value" ] || { printf '%s\n' 'primary and network device identity mismatch' >&2; return 1; }
 }
 
 validate_manifests() {
@@ -625,7 +628,7 @@ require_wolf_ready() {
 
 require_settings_routes() {
   settings_route_lines | while IFS='|' read -r settings_action expected_component expected_focus route_kind; do
-    read_shell cmd package resolve-activity --brief -a "$settings_action" || exit 1
+    read_shell cmd package resolve-activity --brief -a "$settings_action" || { settings_cleanup; exit 1; }
     [ "$ACTUAL" = "$expected_component" ] || {
       printf 'Settings resolver expected=%s actual=%s action=%s\n' "$expected_component" "$ACTUAL" "$settings_action" >&2
       exit 1
@@ -786,20 +789,21 @@ stock_menu_settings_navigation() {
     expected=$1
     read_shell dumpsys window windows || return 1
     actual=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
-    case "$actual" in *"$expected"*) return 0 ;; *) printf 'Settings intermediate focus expected=%s actual=%s\n' "$expected" "$actual" >&2; return 1 ;; esac
+    normalize() { case "$1" in */.*) p=${1%%/*}; printf '%s/%s.%s\n' "$p" "$p" "${1#*/.}" ;; *) printf '%s\n' "$1" ;; esac; }
+    [ "$(normalize "$actual")" = "$(normalize "$expected")" ] || { printf 'Settings intermediate focus expected=%s actual=%s\n' "$expected" "$actual" >&2; return 1; }
   }
   settings_key --longpress 3 || return 1
-  settings_focus HudActivity || return 1
+  settings_focus com.amazon.tv.launcher/.HudActivity || return 1
   for n in 1 2 3 4; do settings_key 22 || return 1; done
   settings_key 23 || return 1
-  settings_focus MainSettingsActivity || return 1
+  settings_focus com.amazon.tv.launcher/.ui.MainSettingsActivity || return 1
   case "$settings_action" in
     android.settings.SETTINGS) ;;
     android.settings.DISPLAY_SETTINGS) settings_key 20 || return 1; settings_key 23 || return 1 ;;
     android.settings.ACCESSIBILITY_SETTINGS) for n in 1 2; do settings_key 20 || return 1; done; for n in 1 2; do settings_key 22 || return 1; done; settings_key 23 || return 1 ;;
     com.amazon.device.settings.action.DATE_TIME|com.amazon.device.settings.action.LANGUAGE)
       settings_key 20 || return 1; for n in 1 2; do settings_key 22 || return 1; done; settings_key 23 || return 1
-      settings_focus PreferencesActivity || return 1
+      settings_focus com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity || return 1
       if [ "$settings_action" = com.amazon.device.settings.action.LANGUAGE ]; then for n in 1 2 3 4 5 6 7; do settings_key 20 || return 1; done; settings_key 23 || return 1; fi
       ;;
   esac
@@ -808,28 +812,28 @@ stock_menu_settings_navigation() {
 verify_settings() {
   require_target
   settings_route_lines | while IFS='|' read -r settings_action expected_component expected_focus route_kind; do
-    read_shell cmd package resolve-activity --brief -a "$settings_action" || exit 1
+    read_shell cmd package resolve-activity --brief -a "$settings_action" || { settings_cleanup; exit 1; }
     [ "$ACTUAL" = "$expected_component" ] || {
       printf 'Settings resolver expected=%s actual=%s action=%s\n' "$expected_component" "$ACTUAL" "$settings_action" >&2
-      return 1
+      settings_cleanup; return 1
     }
     start_settings_action "$settings_action"
     case "$route_kind:$SETTINGS_START_STATUS" in
       shell:0) ;;
-      stock-menu:0) stock_menu_settings_navigation "$settings_action" || exit 1 ;;
+      stock-menu:0) stock_menu_settings_navigation "$settings_action" || { settings_cleanup; exit 1; } ;;
       stock-menu:*)
         case "$SETTINGS_START_OUTPUT" in
           *com.amazon.tv.permission.LAUNCHER_SETTINGS*) ;;
-          *) printf 'Settings direct launch did not show stock-menu permission denial: %s\n' "$settings_action" >&2; exit 1 ;;
+          *) printf 'Settings direct launch did not show stock-menu permission denial: %s\n' "$settings_action" >&2; settings_cleanup; exit 1 ;;
         esac
-        stock_menu_settings_navigation "$settings_action" || exit 1
+        stock_menu_settings_navigation "$settings_action" || { settings_cleanup; exit 1; }
         ;;
       *)
         printf 'Settings action could not be opened: %s\n' "$settings_action" >&2
-        exit 1
+        settings_cleanup; exit 1
         ;;
     esac
-    assert_settings_ui "$settings_action" "$expected_focus" || exit 1
+    assert_settings_ui "$settings_action" "$expected_focus" || { settings_cleanup; exit 1; }
   done
   printf '%s\n' 'SETTINGS_ROUTES=PASS'
   printf '%s\n' 'DEVELOPER_OPTIONS=PASS'
@@ -940,7 +944,6 @@ compact_guard() {
   guard_unchanged_value service_adb_tcp_port "$GUARD_SERVICE_ADB_TCP_PORT" getprop service.adb.tcp.port || return 1
   [ "$GUARD_VALUE" = 5555 ] || return 1
   guard_unchanged_value persist_adb_tcp_port "$GUARD_PERSIST_ADB_TCP_PORT" getprop persist.adb.tcp.port || return 1
-  [ "$GUARD_VALUE" = 5555 ] || return 1
   guard_unchanged_value adbd "$GUARD_ADBD_PID" pidof adbd || return 1
   [ -n "$GUARD_VALUE" ] || { printf '%s\n' 'guard adbd is not running' >&2; return 1; }
   guard_unchanged_value always_on_vpn_app "$GUARD_ALWAYS_ON_VPN_APP" settings get secure always_on_vpn_app || return 1

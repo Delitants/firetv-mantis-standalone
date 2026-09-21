@@ -133,12 +133,17 @@ case "$1" in
       ro.build.version.release) value=${FAKE_RELEASE:-7.1.2} ;;
       ro.build.version.sdk) value=${FAKE_SDK:-25} ;;
       ro.product.cpu.abi) value=${FAKE_ABI:-armeabi-v7a} ;;
+      ro.serialno) if [ "$fake_serial" = network-check:5555 ]; then value=${FAKE_NETWORK_SERIAL:-fake-serial}; else value=${FAKE_SERIALNO:-fake-serial}; fi ;;
       persist.sys.locale) value=${FAKE_PERSIST_SYS_LOCALE:-en-US} ;;
       system_locales) value=${FAKE_SYSTEM_LOCALES:-en-US} ;;
       persist.sys.usb.config) value=${FAKE_PERSIST_USB_CONFIG:-mtp,adb} ;;
       sys.usb.config) value=${FAKE_SYS_USB_CONFIG:-mtp,adb} ;;
       service.adb.tcp.port) value=${FAKE_SERVICE_ADB_TCP_PORT:-5555} ;;
-      persist.adb.tcp.port) value=${FAKE_PERSIST_ADB_TCP_PORT-5555} ;;
+      persist.adb.tcp.port)
+        if [ -n "${FAKE_AFTER_UNINSTALL_PERSIST_ADB_TCP_PORT+x}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] && awk '$1 == "uninstalled" { found=1 } END { exit !found }' "$FAKE_PACKAGE_STATE"; then
+          value=$FAKE_AFTER_UNINSTALL_PERSIST_ADB_TCP_PORT
+        else value=${FAKE_PERSIST_ADB_TCP_PORT-5555}; fi
+        ;;
       init.svc.adbd) value=${FAKE_INIT_SVC_ADBD:-running} ;;
       *) value= ;;
     esac
@@ -353,6 +358,7 @@ case "$1" in
       case "$state" in
         sequence:*:--longpress:3) action=HudActivity ;;
         sequence:*:--longpress:3,22,22,22,22,23) action=MainSettingsActivity ;;
+        sequence:*:--longpress:3,22,22,22,22,23,20,22,22,23) action=PreferencesActivity ;;
       esac
       [ "$action" != "$state" ] || action=wolf
       focus=$(ui_focus_for_action "$action")

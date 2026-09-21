@@ -9,7 +9,7 @@ and refuses operations outside that boundary.
 image procedure. It does not change locale automatically. Do not add APKs,
 backups, connection data, or credentials to this repository.
 
-Start with an audit, read the generated restore script, run `verify --baseline AUDIT_DIRECTORY`, and use
+Start with an audit, read the generated restore script, run `--baseline AUDIT_DIRECTORY verify` (and `--network-serial SERIAL:5555` before it when the primary serial is USB), and use
 `verify-settings` before any package action. The latter only opens stock
 Settings routes and backs out; it never writes a setting. See
 `docs/RECOVERY.md` before using `apply` or `restore`.

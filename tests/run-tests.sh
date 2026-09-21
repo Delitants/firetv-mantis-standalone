@@ -181,6 +181,7 @@ prepare_package_state() {
   unset FAKE_PERSIST_USB_CONFIG FAKE_SYS_USB_CONFIG FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT
   unset FAKE_ADB_STATE FAKE_ALWAYS_ON_VPN_APP FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_TUN0
   unset FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION FAKE_UI_STATE
+  unset FAKE_CURRENT_FOCUS FAKE_WOLF_FOCUS_DELAY FAKE_WOLF_FOCUS_DELAY_FILE FAKE_NETWORK_MODEL FAKE_NETWORK_SERIAL FAKE_SERIALNO
   unset FAKE_WOLF_STATE FAKE_WOLF_INSTALLED_VERSION_CODE FAKE_WOLF_INSTALLED_VERSION_NAME
   unset FAKE_WOLF_DUMPSYS_INDENT
   FAKE_PACKAGE_STATE=$TEST_TMP/package-state
@@ -442,6 +443,23 @@ FAKE_UNINSTALL_MODE=still-active run_tool --output "$PACKAGE_STILL_ACTIVE_DIR" -
 assert_contains "$ERR" 'removal verification failed for com.amazon.android.marketplace'
 assert_contains "$(cat "$PACKAGE_STILL_ACTIVE_DIR/operation-journal.txt")" 'attempt com.amazon.android.marketplace'
 assert_contains "$(cat "$PACKAGE_STILL_ACTIVE_DIR/operation-journal.txt")" 'failure com.amazon.android.marketplace'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+
+# Break caught: an empty persistent TCP property is a valid captured baseline,
+# but it must remain unchanged after every user-zero removal.
+PACKAGE_EMPTY_PORT_DIR="$TEST_TMP/apply-empty-persist-port"
+prepare_package_state
+set_wolf_ready
+FAKE_PERSIST_ADB_TCP_PORT= run_tool --output "$PACKAGE_EMPTY_PORT_DIR" --yes apply ||
+  fail "apply rejected empty persistent TCP baseline: $ERR"
+prepare_package_state
+set_wolf_ready
+PACKAGE_CHANGED_PORT_DIR="$TEST_TMP/apply-changed-persist-port"
+if FAKE_PERSIST_ADB_TCP_PORT= FAKE_AFTER_UNINSTALL_PERSIST_ADB_TCP_PORT=5555 \
+  run_tool --output "$PACKAGE_CHANGED_PORT_DIR" --yes apply; then
+  fail 'apply accepted a changed persistent TCP port after removal'
+fi
+assert_contains "$ERR" 'guard changed persist_adb_tcp_port expected= actual=5555'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
 
 # Break caught: accepting a nonliteral Success response makes failed removals look safe.
@@ -781,6 +799,11 @@ if FAKE_NETWORK_MODEL=AFTKA "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fi
   fail 'verify accepted a wrong independent network target'
 fi
 assert_contains "$(cat "$TEST_TMP/err")" 'network target ro.product.model expected=AFTMM actual=AFTKA'
+if FAKE_NETWORK_SERIAL=other-device "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial usb-primary \
+  --network-serial network-check:5555 --baseline "$VERIFY_BASELINE" verify >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
+  fail 'verify accepted mismatched primary/network identity'
+fi
+assert_contains "$(cat "$TEST_TMP/err")" 'primary and network device identity mismatch'
 
 # Break caught: every exact route must resolve and render, including the
 # Developer Options screen that preserves ADB Debugging access.
@@ -796,10 +819,22 @@ set_wolf_ready
 if FAKE_CURRENT_FOCUS=com.example/.Wrong FAKE_UI_STATE="$TEST_TMP/ui-state" run_verify_settings; then
   fail 'verify-settings accepted a wrong current focus'
 fi
-assert_contains "$ERR" 'Settings focus expected='
+assert_contains "$ERR" 'Settings intermediate focus expected='
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell rm -f /sdcard/mantis-ui-smoke.xml'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent 3'
-assert_contains "$OUT" 'UI_SMOKE=PASS'
+assert_not_contains "$OUT" 'UI_SMOKE=PASS'
+
+# Break caught: a resolver mismatch is a Settings-smoke failure too, so the
+# temporary XML and stock UI must be cleaned up before it returns.
+prepare_package_state
+set_wolf_ready
+if FAKE_SETTINGS_ROUTE_ACTION=android.settings.SETTINGS \
+  FAKE_SETTINGS_ROUTE_VALUE=com.example/.Wrong run_verify_settings; then
+  fail 'verify-settings accepted an unexpected Settings resolver'
+fi
+assert_contains "$ERR" 'Settings resolver expected=com.amazon.tv.launcher/.ui.SettingsActivity'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell rm -f /sdcard/mantis-ui-smoke.xml'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent 3'
 
 # Break caught: an incomplete preserve manifest is not enough if a required
 # package is absent from the active user-zero package list.

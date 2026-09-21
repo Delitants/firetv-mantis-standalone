@@ -27,4 +27,7 @@ The smoke verifier parses only the current-focus field, waits in bounded steps
 for asynchronous Launcher activity changes, and cleans its temporary hierarchy
 file before backing out to Home on every failed route. Stock-menu events are
 paced; an independent `--network-serial` is required when the primary serial is
-USB.
+USB. The controller compares the two transports' nonempty device identities in
+memory without publishing them. Its checksummed baseline preserves the exact
+persisted ADB TCP-port state (including an empty value); only the runtime TCP
+listener is required to use port 5555.
