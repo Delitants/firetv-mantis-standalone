@@ -1,0 +1,48 @@
+#!/bin/sh
+
+if [ -n "${FAKE_ADB_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
+fi
+
+if [ "$1" != "-s" ] || [ -z "${2:-}" ]; then
+  printf '%s\n' 'fake adb requires -s SERIAL' >&2
+  exit 64
+fi
+shift 2
+
+if [ "$1" != "shell" ]; then
+  printf '%s\n' 'fake adb supports only shell commands' >&2
+  exit 64
+fi
+shift
+
+case "$1" in
+  getprop)
+    case "${2:-}" in
+      ro.product.manufacturer) value=${FAKE_MANUFACTURER:-Amazon} ;;
+      ro.product.model) value=${FAKE_MODEL:-AFTMM} ;;
+      ro.product.device) value=${FAKE_DEVICE:-mantis} ;;
+      ro.build.id) value=${FAKE_BUILD_ID:-NS6711} ;;
+      ro.build.version.incremental) value=${FAKE_INCREMENTAL:-0011644900484} ;;
+      ro.build.version.release) value=${FAKE_RELEASE:-7.1.2} ;;
+      ro.build.version.sdk) value=${FAKE_SDK:-25} ;;
+      ro.product.cpu.abi) value=${FAKE_ABI:-armeabi-v7a} ;;
+      *) value= ;;
+    esac
+    ;;
+  uname)
+    value=${FAKE_UNAME:-armv7l}
+    ;;
+  getenforce)
+    value=${FAKE_ENFORCE:-Enforcing}
+    ;;
+  id)
+    value=${FAKE_UID:-2000}
+    ;;
+  *)
+    printf 'unsupported fake adb shell command: %s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+
+printf '%s\n' "$value"
