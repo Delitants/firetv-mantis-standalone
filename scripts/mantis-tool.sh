@@ -352,7 +352,7 @@ audit_directory() {
 
 publish_audit() {
   final_dir=$(audit_directory)
-  [ ! -e "$final_dir" ] || { printf 'audit output already exists: %s\n' "$final_dir" >&2; return 1; }
+  [ ! -e "$final_dir" ] && [ ! -L "$final_dir" ] || { printf 'audit output already exists: %s\n' "$final_dir" >&2; return 1; }
   final_parent=$(dirname "$final_dir")
   [ -d "$final_parent" ] || { printf 'audit output parent does not exist: %s\n' "$final_parent" >&2; return 1; }
   work_dir=$(mktemp -d "$final_dir.tmp.XXXXXX") || return 1
@@ -373,27 +373,11 @@ publish_audit() {
     rm -rf "$work_dir"
     return 1
   fi
-  work_name=$(basename "$work_dir")
-  if [ -e "$final_dir" ] || [ -L "$final_dir" ]; then
+  if ! python3 "$script_dir/atomic-rename.py" "$work_dir" "$final_dir"; then
     rm -rf "$work_dir"
-    printf 'audit output appeared during publication: %s\n' "$final_dir" >&2
+    printf 'audit output publication conflict: %s\n' "$final_dir" >&2
     return 1
   fi
-  if ! mv "$work_dir" "$final_dir"; then
-    rm -rf "$work_dir"
-    return 1
-  fi
-  if [ -d "$final_dir/$work_name" ]; then
-    if [ ! -L "$final_dir" ]; then
-      rm -rf "$final_dir/$work_name"
-    fi
-    printf 'audit output appeared during publication: %s\n' "$final_dir" >&2
-    return 1
-  fi
-  [ -d "$final_dir" ] || {
-    printf 'audit output publication failed: %s\n' "$final_dir" >&2
-    return 1
-  }
   printf 'AUDIT_OUTPUT=%s\n' "$final_dir"
 }
 

@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+: "${REAL_PYTHON:?set REAL_PYTHON to the real Python interpreter}"
+
+case "${RACE_OUTPUT_KIND:-}" in
+  directory)
+    mkdir "$RACE_OUTPUT_DIR"
+    printf '%s\n' 'unrelated destination content' > "$RACE_OUTPUT_DIR/keep.txt"
+    ;;
+  symlink)
+    ln -s "$RACE_LINK_TARGET" "$RACE_OUTPUT_DIR"
+    ;;
+  *)
+    printf 'unknown publish race kind: %s\n' "${RACE_OUTPUT_KIND:-}" >&2
+    exit 64
+    ;;
+esac
+
+exec "$REAL_PYTHON" "$@"

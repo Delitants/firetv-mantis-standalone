@@ -96,15 +96,47 @@ assert_contains "$(cat "$AUDIT_DIR/home-resolver.txt")" 'com.amazon.tv.launcher/
 assert_contains "$(cat "$AUDIT_DIR/bluetooth.txt")" 'bluetooth_on=1'
 assert_contains "$(cat "$AUDIT_DIR/tun0.txt")" 'tun0:'
 
-# Break caught: accepting a destination created between preflight and publish.
+# Break caught: placing a backup in a directory created at publish time.
 RACE_AUDIT_DIR="$TEST_TMP/audit-race"
-if PATH="$ROOT/tests/fixtures:$PATH" RACE_OUTPUT_DIR="$RACE_AUDIT_DIR" run_tool --output "$RACE_AUDIT_DIR" audit; then
+if (
+  PATH="$ROOT/tests/fixtures:$PATH"
+  REAL_PYTHON="$(command -v python3)"
+  RACE_OUTPUT_KIND=directory
+  RACE_OUTPUT_DIR="$RACE_AUDIT_DIR"
+  export PATH REAL_PYTHON RACE_OUTPUT_KIND RACE_OUTPUT_DIR
+  run_tool --output "$RACE_AUDIT_DIR" audit
+); then
   fail 'audit accepted an output directory that appeared during publication'
 fi
-assert_contains "$ERR" 'audit output appeared during publication'
+OUT=$(cat "$TEST_TMP/out")
+ERR=$(cat "$TEST_TMP/err")
+assert_contains "$ERR" 'audit output publication conflict'
 [ -d "$RACE_AUDIT_DIR" ] || fail 'race fixture did not create the destination directory'
-[ -z "$(find "$RACE_AUDIT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
-  fail 'audit left its staged backup nested in the raced destination'
+assert_contains "$(cat "$RACE_AUDIT_DIR/keep.txt")" 'unrelated destination content'
+[ ! -e "$RACE_AUDIT_DIR/device.txt" ] || fail 'audit published a backup into the raced destination'
+
+# Break caught: following a symlink created at the exact output path.
+RACE_SYMLINK_AUDIT_DIR="$TEST_TMP/audit-race-symlink"
+RACE_LINK_TARGET="$TEST_TMP/audit-race-symlink-target"
+mkdir "$RACE_LINK_TARGET"
+printf '%s\n' 'unrelated symlink target content' > "$RACE_LINK_TARGET/keep.txt"
+if (
+  PATH="$ROOT/tests/fixtures:$PATH"
+  REAL_PYTHON="$(command -v python3)"
+  RACE_OUTPUT_KIND=symlink
+  RACE_OUTPUT_DIR="$RACE_SYMLINK_AUDIT_DIR"
+  RACE_LINK_TARGET="$RACE_LINK_TARGET"
+  export PATH REAL_PYTHON RACE_OUTPUT_KIND RACE_OUTPUT_DIR RACE_LINK_TARGET
+  run_tool --output "$RACE_SYMLINK_AUDIT_DIR" audit
+); then
+  fail 'audit accepted an output symlink that appeared during publication'
+fi
+OUT=$(cat "$TEST_TMP/out")
+ERR=$(cat "$TEST_TMP/err")
+assert_contains "$ERR" 'audit output publication conflict'
+[ -L "$RACE_SYMLINK_AUDIT_DIR" ] || fail 'race fixture did not create the output symlink'
+assert_contains "$(cat "$RACE_LINK_TARGET/keep.txt")" 'unrelated symlink target content'
+[ ! -e "$RACE_LINK_TARGET/device.txt" ] || fail 'audit followed the raced output symlink'
 
 # Break caught: preferring a cmd form that does not prove --user support.
 PM_AUDIT_DIR="$TEST_TMP/audit-pm"

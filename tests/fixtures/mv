@@ -1,8 +1,0 @@
-#!/bin/sh
-set -eu
-
-if [ -n "${RACE_OUTPUT_DIR:-}" ] && [ ! -e "$RACE_OUTPUT_DIR" ]; then
-  mkdir "$RACE_OUTPUT_DIR"
-fi
-
-exec /bin/mv "$@"
