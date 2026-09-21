@@ -27,7 +27,7 @@ unset FAKE_MANUFACTURER FAKE_MODEL FAKE_DEVICE FAKE_BUILD_ID FAKE_INCREMENTAL
 unset FAKE_RELEASE FAKE_SDK FAKE_ABI FAKE_UNAME FAKE_ENFORCE FAKE_UID
 unset FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES FAKE_HOME FAKE_BLUETOOTH_ON FAKE_TUN0
 unset FAKE_ADB_ENABLED FAKE_DEVELOPMENT_SETTINGS_ENABLED FAKE_PERSIST_USB_CONFIG FAKE_SYS_USB_CONFIG
-unset FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT FAKE_ADBD_PID FAKE_ALWAYS_ON_VPN_APP
+unset FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT FAKE_ADBD_PID FAKE_INIT_SVC_ADBD FAKE_ALWAYS_ON_VPN_APP
 unset FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_PACKAGE_STATE FAKE_UNINSTALL_MODE FAKE_UNINSTALL_FAIL_PACKAGE
 unset FAKE_AFTER_UNINSTALL_ADB_ENABLED FAKE_UNINSTALL_RESULT
 unset FAKE_AFTER_UNINSTALL_ADB_ENABLED_AFTER_COUNT FAKE_INSTALL_EXISTING_FAIL_PACKAGE
@@ -97,6 +97,33 @@ run_tool() {
   return "$STATUS"
 }
 
+run_verify() {
+  : > "$FAKE_ADB_LOG"
+  if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 verify >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
+    STATUS=0
+  else
+    STATUS=$?
+  fi
+  OUT=$(cat "$TEST_TMP/out")
+  ERR=$(cat "$TEST_TMP/err")
+  return "$STATUS"
+}
+
+run_verify_settings() {
+  : > "$FAKE_ADB_LOG"
+  FAKE_UI_STATE="$TEST_TMP/ui-state"
+  export FAKE_UI_STATE
+  rm -f "$FAKE_UI_STATE"
+  if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 verify-settings >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
+    STATUS=0
+  else
+    STATUS=$?
+  fi
+  OUT=$(cat "$TEST_TMP/out")
+  ERR=$(cat "$TEST_TMP/err")
+  return "$STATUS"
+}
+
 run_tool_interrupted() {
   : > "$FAKE_ADB_LOG"
   "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 "$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err" &
@@ -147,6 +174,13 @@ reset_wolf_fixture() {
 }
 
 prepare_package_state() {
+  unset FAKE_BLUETOOTH_ON FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES
+  unset FAKE_ADB_ENABLED FAKE_DEVELOPMENT_SETTINGS_ENABLED FAKE_INIT_SVC_ADBD FAKE_ADBD_PID
+  unset FAKE_PERSIST_USB_CONFIG FAKE_SYS_USB_CONFIG FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT
+  unset FAKE_ADB_STATE FAKE_ALWAYS_ON_VPN_APP FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_TUN0
+  unset FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION FAKE_UI_STATE
+  unset FAKE_WOLF_STATE FAKE_WOLF_INSTALLED_VERSION_CODE FAKE_WOLF_INSTALLED_VERSION_NAME
+  unset FAKE_WOLF_DUMPSYS_INDENT
   FAKE_PACKAGE_STATE=$TEST_TMP/package-state
   export FAKE_PACKAGE_STATE
   : > "$FAKE_PACKAGE_STATE"
@@ -234,15 +268,16 @@ assert_contains "$OUT" 'RESTORE_CAPABILITY=cmd'
 assert_contains "$OUT" 'AUDIT=PASS'
 assert_contains "$(cat "$AUDIT_DIR/device.txt")" 'persist.sys.locale=en-US'
 assert_contains "$(cat "$AUDIT_DIR/device.txt")" 'system_locales=en-US'
-assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.SETTINGS=com.amazon.tv.settings/.SettingsActivity'
-assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.WIFI_SETTINGS=com.amazon.tv.settings/.wifi.WifiSettingsActivity'
-assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.MANAGE_APPLICATIONS_SETTINGS=com.amazon.tv.settings/.applications.ManageApplicationsActivity'
-assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.CONTROLLERS_SETTINGS=com.amazon.tv.settings/.controllers.ControllersActivity'
-assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.DEVICE_INFO_SETTINGS=com.amazon.tv.settings/.device.DeviceInfoSettingsActivity'
-assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.ACCESSIBILITY_SETTINGS=com.amazon.tv.settings/.accessibility.AccessibilitySettingsActivity'
-assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.DISPLAY_SETTINGS=com.amazon.tv.settings/.display.DisplaySettingsActivity'
-assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'com.amazon.device.settings.action.DATE_TIME=com.amazon.tv.settings/.date.DateTimeSettingsActivity'
-assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'com.amazon.device.settings.action.LANGUAGE=com.amazon.tv.settings/.locale.LocaleSettingsActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.SETTINGS=com.amazon.tv.launcher/.ui.SettingsActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.WIFI_SETTINGS=com.amazon.tv.settings.v2/.tv.network.NetworkActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.MANAGE_APPLICATIONS_SETTINGS=com.amazon.tv.settings.v2/.tv.applications.ApplicationsActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.CONTROLLERS_SETTINGS=com.amazon.tv.settings.v2/.tv.controllers_bluetooth_devices.ControllersAndBluetoothActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.DEVICE_INFO_SETTINGS=com.amazon.tv.settings.v2/.tv.device.DeviceActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.ACCESSIBILITY_SETTINGS=com.amazon.tv.settings.v2/.tv.accessibility.AccessibilityActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.DISPLAY_SETTINGS=com.amazon.tv.settings.v2/.tv.display_sounds.DisplayAndSoundsActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'com.amazon.device.settings.action.DATE_TIME=com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'com.amazon.device.settings.action.LANGUAGE=com.amazon.tv.settings.v2/.tv.preferences.LanguageSelectActivity'
+assert_contains "$(cat "$AUDIT_DIR/settings-route-resolvers.txt")" 'android.settings.APPLICATION_DEVELOPMENT_SETTINGS=com.amazon.tv.settings.v2/.tv.device.DeviceActivity'
 assert_contains "$(cat "$AUDIT_DIR/home-resolver.txt")" 'com.amazon.tv.launcher/.HomeActivity'
 assert_contains "$(cat "$AUDIT_DIR/bluetooth.txt")" 'bluetooth_on=1'
 assert_contains "$(cat "$AUDIT_DIR/tun0.txt")" 'tun0:'
@@ -595,8 +630,8 @@ FAKE_MODEL=$(printf 'AFTMM\r') run_tool --output "$TEST_TMP/audit-cr" audit
 [ "$STATUS" -eq 0 ] || fail 'audit rejected a trailing CR'
 assert_contains "$OUT" 'SUPPORTED_MUTATION_TARGET=YES'
 
-ORIGINAL_REMOVE="$TEST_TMP/remove-user0.txt"
-cp "$MANIFEST_REMOVE" "$ORIGINAL_REMOVE"
+INVALID_MANIFEST_ORIGINAL="$TEST_TMP/remove-user0.txt"
+cp "$MANIFEST_REMOVE" "$INVALID_MANIFEST_ORIGINAL"
 printf '%s\n' 'com.amazon.bueller.music ' > "$MANIFEST_REMOVE"
 
 if FAKE_MODEL=AFTKA run_tool --yes apply; then
@@ -615,7 +650,7 @@ assert_contains "$ERR" 'invalid package token'
 case "$OUT" in
   *'No mutation is implemented.'*) fail 'apply reached its action after manifest rejection' ;;
 esac
-restore_manifest
+cp "$INVALID_MANIFEST_ORIGINAL" "$MANIFEST_REMOVE"
 
 # Break caught: accepting a fetch from a different Wolf artifact URL.
 reset_wolf_fixture
@@ -713,6 +748,208 @@ assert_contains "$OUT" 'WOLF_PREVIOUS_VERSION_NAME=0.1.7-FireTV'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'install -r '
 [ "$(cat "$WOLF_UPGRADE_STATE")" = '11900120 0.1.9-Wolf' ] || fail 'Wolf upgrade did not finish at the pinned identity'
 assert_wolf_download_removed
+
+# Break caught: verification must report a listener separately from observed
+# end-to-end network remote behavior; an ADB probe cannot prove remote input.
+prepare_package_state
+set_wolf_ready
+run_verify || fail "verify rejected the complete safe fixture: $ERR"
+assert_contains "$OUT" 'VERIFY_GATE=PASS'
+assert_contains "$OUT" 'SETTINGS_ROUTES=PASS'
+assert_contains "$OUT" 'ADB_PERSISTENCE=PASS'
+assert_contains "$OUT" 'TCP8009=PASS'
+assert_contains "$OUT" 'NETWORK_REMOTE_OBSERVED=UNVERIFIED'
+
+# Break caught: every exact route must resolve and render, including the
+# Developer Options screen that preserves ADB Debugging access.
+run_verify_settings || fail "verify-settings rejected the complete safe fixture: $ERR"
+assert_contains "$OUT" 'SETTINGS_ROUTES=PASS'
+assert_contains "$OUT" 'DEVELOPER_OPTIONS=PASS'
+assert_contains "$OUT" 'VERIFY_SETTINGS=PASS'
+assert_contains "$OUT" 'UI_SMOKE=PASS'
+
+# Break caught: an incomplete preserve manifest is not enough if a required
+# package is absent from the active user-zero package list.
+awk '
+  $1 == "active" && $2 == "com.amazon.tcomm" { print "uninstalled", $2; next }
+  { print }
+' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
+if run_verify; then
+  fail 'verify accepted a missing mandatory preserve package'
+fi
+assert_contains "$ERR" 'guard missing active package: com.amazon.tcomm'
+
+# Break caught: protected applications are mandatory even when their package
+# name appears outside the generic preserve manifests.
+prepare_package_state
+set_wolf_ready
+awk '
+  $1 == "active" && $2 == "com.wireguard.android" { print "uninstalled", $2; next }
+  { print }
+' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
+if run_verify; then
+  fail 'verify accepted an absent protected application'
+fi
+assert_contains "$ERR" 'guard missing active package: com.wireguard.android'
+
+# Break caught: Bluetooth and the exact Wolf launcher identity are recovery
+# gates, not merely install history.
+prepare_package_state
+set_wolf_ready
+if FAKE_BLUETOOTH_ON=0 run_verify; then
+  fail 'verify accepted Bluetooth disabled'
+fi
+assert_contains "$ERR" 'verify bluetooth_on expected=1 actual=0'
+prepare_package_state
+clear_wolf_ready
+if run_verify; then
+  fail 'verify accepted installed Wolf 0.1.7-FireTV'
+fi
+assert_contains "$ERR" 'guard Wolf version code expected=11900120 actual=11723945'
+
+# Break caught: resolver equality is a contract; a similarly named Settings
+# activity is not a safe substitute.
+prepare_package_state
+set_wolf_ready
+if FAKE_SETTINGS_ROUTE_ACTION=android.settings.WIFI_SETTINGS \
+  FAKE_SETTINGS_ROUTE_VALUE=com.example.settings/.WifiActivity run_verify; then
+  fail 'verify accepted an unexpected Wi-Fi Settings resolver'
+fi
+assert_contains "$ERR" 'Settings resolver expected=com.amazon.tv.settings.v2/.tv.network.NetworkActivity'
+
+# Break caught: a route can resolve while its UI no longer renders. This is
+# particularly important for Developer Options and the permission-protected
+# stock-menu paths.
+prepare_package_state
+set_wolf_ready
+if FAKE_UI_EMPTY_ACTION=android.settings.APPLICATION_DEVELOPMENT_SETTINGS run_verify_settings; then
+  fail 'verify-settings accepted an unrendered Developer Options screen'
+fi
+assert_contains "$ERR" 'Settings UI hierarchy was empty: android.settings.APPLICATION_DEVELOPMENT_SETTINGS'
+prepare_package_state
+set_wolf_ready
+if FAKE_UI_EMPTY_ACTION=android.settings.ACCESSIBILITY_SETTINGS run_verify_settings; then
+  fail 'verify-settings accepted an unrendered stock-menu Accessibility screen'
+fi
+assert_contains "$ERR" 'Settings UI hierarchy was empty: android.settings.ACCESSIBILITY_SETTINGS'
+
+# Break caught: ADB persistence values are compared against the live Fire OS
+# baseline. development_settings_enabled is legitimately null on this build.
+prepare_package_state
+set_wolf_ready
+if FAKE_ADB_ENABLED=0 run_verify; then
+  fail 'verify accepted changed adb_enabled'
+fi
+assert_contains "$ERR" 'verify adb_enabled expected=1 actual=0'
+prepare_package_state
+set_wolf_ready
+if FAKE_DEVELOPMENT_SETTINGS_ENABLED=1 run_verify; then
+  fail 'verify accepted a changed development_settings_enabled baseline'
+fi
+assert_contains "$ERR" 'verify development_settings_enabled expected=null actual=1'
+prepare_package_state
+set_wolf_ready
+if FAKE_INIT_SVC_ADBD=stopped run_verify; then
+  fail 'verify accepted a stopped adbd'
+fi
+assert_contains "$ERR" 'verify adbd is not running'
+prepare_package_state
+set_wolf_ready
+if FAKE_PERSIST_USB_CONFIG=mtp run_verify; then
+  fail 'verify accepted a persistent USB configuration without adb'
+fi
+assert_contains "$ERR" 'verify requires USB configuration containing adb: mtp'
+prepare_package_state
+set_wolf_ready
+if FAKE_SYS_USB_CONFIG=mtp run_verify; then
+  fail 'verify accepted a current USB configuration without adb'
+fi
+assert_contains "$ERR" 'verify requires USB configuration containing adb: mtp'
+prepare_package_state
+set_wolf_ready
+if FAKE_SERVICE_ADB_TCP_PORT=5556 run_verify; then
+  fail 'verify accepted a changed configured TCP ADB port'
+fi
+assert_contains "$ERR" 'verify service.adb.tcp.port expected=5555 actual=5556'
+prepare_package_state
+set_wolf_ready
+if FAKE_ADB_STATE=offline run_verify; then
+  fail 'verify accepted an unreachable TCP 5555 transport'
+fi
+assert_contains "$ERR" 'verify TCP 5555 is not reachable: offline'
+
+# Break caught: locale, WireGuard continuity, and tun0 must not silently drift
+# across a debloat operation.
+prepare_package_state
+set_wolf_ready
+if FAKE_PERSIST_SYS_LOCALE=fr-FR run_verify; then
+  fail 'verify accepted a changed locale'
+fi
+assert_contains "$ERR" 'verify locale expected=en-US actual=fr-FR'
+prepare_package_state
+set_wolf_ready
+if FAKE_ALWAYS_ON_VPN_APP=none run_verify; then
+  fail 'verify accepted changed WireGuard Always-on application'
+fi
+assert_contains "$ERR" 'verify always_on_vpn_app expected=com.wireguard.android actual=null'
+prepare_package_state
+set_wolf_ready
+if FAKE_ALWAYS_ON_VPN_LOCKDOWN=0 run_verify; then
+  fail 'verify accepted changed WireGuard lockdown'
+fi
+assert_contains "$ERR" 'verify always_on_vpn_lockdown expected=1 actual=0'
+prepare_package_state
+set_wolf_ready
+if FAKE_TUN0=absent run_verify; then
+  fail 'verify accepted changed tun0 presence'
+fi
+assert_contains "$ERR" 'verify tun0 expected=present actual=absent'
+
+# Break caught: publication checks reject private connection material,
+# executable images, and destructive system-partition commands in any tree.
+SCAN_FIXTURE="$TEST_TMP/excluded-content"
+mkdir "$SCAN_FIXTURE"
+private_octet=10
+printf '%s.%s.%s.%s\n' "$private_octet" 23 45 67 > "$SCAN_FIXTURE/private-address.txt"
+if sh "$ROOT/tests/scan-excluded-content.sh" "$SCAN_FIXTURE"; then
+  fail 'excluded-content scan accepted a private address'
+fi
+rm "$SCAN_FIXTURE/private-address.txt"
+printf '%s\n' "-----BE"'GIN PRIVATE KEY-----' > "$SCAN_FIXTURE/key.txt"
+if sh "$ROOT/tests/scan-excluded-content.sh" "$SCAN_FIXTURE"; then
+  fail 'excluded-content scan accepted a PEM key header'
+fi
+rm "$SCAN_FIXTURE/key.txt"
+printf '%s\n' 'Private'Key' = secret' > "$SCAN_FIXTURE/tunnel.conf"
+if sh "$ROOT/tests/scan-excluded-content.sh" "$SCAN_FIXTURE"; then
+  fail 'excluded-content scan accepted a WireGuard private key'
+fi
+rm "$SCAN_FIXTURE/tunnel.conf"
+: > "$SCAN_FIXTURE/forbidden.apk"
+if sh "$ROOT/tests/scan-excluded-content.sh" "$SCAN_FIXTURE"; then
+  fail 'excluded-content scan accepted an APK'
+fi
+rm "$SCAN_FIXTURE/forbidden.apk"
+: > "$SCAN_FIXTURE/forbidden.img"
+if sh "$ROOT/tests/scan-excluded-content.sh" "$SCAN_FIXTURE"; then
+  fail 'excluded-content scan accepted a partition image'
+fi
+rm "$SCAN_FIXTURE/forbidden.img"
+printf '%s %s\n' 'rm -rf' '/sys''tem' > "$SCAN_FIXTURE/destructive.sh"
+if sh "$ROOT/tests/scan-excluded-content.sh" "$SCAN_FIXTURE"; then
+  fail 'excluded-content scan accepted a destructive system command'
+fi
+rm "$SCAN_FIXTURE/destructive.sh"
+
+for documentation in README.md NOTICE.md SECURITY.md docs/MODEL-SAFETY.md \
+  docs/PACKAGE-RATIONALE.md docs/RECOVERY.md docs/TEST-EVIDENCE.md; do
+  assert_file "$ROOT/$documentation"
+done
+
+clear_wolf_ready
+unset FAKE_PACKAGE_STATE FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION
 
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 python3 -B "$ROOT/tests/test-atomic-rename.py"

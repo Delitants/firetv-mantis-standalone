@@ -69,6 +69,45 @@ package_list() {
   esac
 }
 
+settings_route() {
+  action=$1
+  if [ "${FAKE_SETTINGS_ROUTE_ACTION:-}" = "$action" ]; then
+    printf '%s\n' "${FAKE_SETTINGS_ROUTE_VALUE:-}"
+    return
+  fi
+  case "$action" in
+    android.settings.SETTINGS) printf '%s\n' 'com.amazon.tv.launcher/.ui.SettingsActivity' ;;
+    android.settings.WIFI_SETTINGS) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.network.NetworkActivity' ;;
+    android.settings.MANAGE_APPLICATIONS_SETTINGS) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.applications.ApplicationsActivity' ;;
+    android.settings.CONTROLLERS_SETTINGS) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.controllers_bluetooth_devices.ControllersAndBluetoothActivity' ;;
+    android.settings.DEVICE_INFO_SETTINGS) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.device.DeviceActivity' ;;
+    android.settings.ACCESSIBILITY_SETTINGS) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.accessibility.AccessibilityActivity' ;;
+    android.settings.DISPLAY_SETTINGS) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.display_sounds.DisplayAndSoundsActivity' ;;
+    com.amazon.device.settings.action.DATE_TIME) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity' ;;
+    com.amazon.device.settings.action.LANGUAGE) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.LanguageSelectActivity' ;;
+    android.settings.APPLICATION_DEVELOPMENT_SETTINGS) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.device.DeviceActivity' ;;
+    android.intent.action.MAIN) printf '%s\n' "${FAKE_HOME_RESOLVER:-com.amazon.tv.launcher/.HomeActivity}" ;;
+    *) return 1 ;;
+  esac
+}
+
+ui_focus_for_action() {
+  case "$1" in
+    android.settings.SETTINGS) printf '%s\n' 'com.amazon.tv.launcher/.ui.MainSettingsActivity' ;;
+    *) settings_route "$1" ;;
+  esac
+}
+
+write_ui_state() {
+  [ -n "${FAKE_UI_STATE:-}" ] || return 0
+  printf '%s\n' "$1" > "$FAKE_UI_STATE"
+}
+
+read_ui_state() {
+  [ -n "${FAKE_UI_STATE:-}" ] && [ -f "$FAKE_UI_STATE" ] || return 1
+  cat "$FAKE_UI_STATE"
+}
+
 case "$1" in
   getprop)
     case "${2:-}" in
@@ -86,6 +125,7 @@ case "$1" in
       sys.usb.config) value=${FAKE_SYS_USB_CONFIG:-mtp,adb} ;;
       service.adb.tcp.port) value=${FAKE_SERVICE_ADB_TCP_PORT:-5555} ;;
       persist.adb.tcp.port) value=${FAKE_PERSIST_ADB_TCP_PORT:-5555} ;;
+      init.svc.adbd) value=${FAKE_INIT_SVC_ADBD:-running} ;;
       *) value= ;;
     esac
     ;;
@@ -109,8 +149,10 @@ case "$1" in
           value=${FAKE_ADB_ENABLED:-1}
         fi
         ;;
-      global:development_settings_enabled) value=${FAKE_DEVELOPMENT_SETTINGS_ENABLED:-1} ;;
-      secure:always_on_vpn_app) value=${FAKE_ALWAYS_ON_VPN_APP:-com.wireguard.android} ;;
+      global:development_settings_enabled) value=${FAKE_DEVELOPMENT_SETTINGS_ENABLED:-null} ;;
+      secure:always_on_vpn_app)
+        if [ "${FAKE_ALWAYS_ON_VPN_APP:-}" = none ]; then value=null; else value=${FAKE_ALWAYS_ON_VPN_APP:-com.wireguard.android}; fi
+        ;;
       secure:always_on_vpn_lockdown) value=${FAKE_ALWAYS_ON_VPN_LOCKDOWN:-1} ;;
       *) printf 'unsupported fake settings query: %s\n' "$*" >&2; exit 64 ;;
     esac
@@ -120,6 +162,10 @@ case "$1" in
       printf '%s\n' 'fake adb only exposes ip link show tun0' >&2
       exit 64
     }
+    if [ "${FAKE_TUN0:-}" = absent ]; then
+      printf '%s\n' 'Cannot find device "tun0"' >&2
+      exit 1
+    fi
     value=${FAKE_TUN0:-'7: tun0: <POINTOPOINT,NOARP,UP,LOWER_UP>'}
     ;;
   cmd)
@@ -139,19 +185,7 @@ case "$1" in
               fi
               shift
             done
-            case "$action" in
-              android.settings.SETTINGS) value='com.amazon.tv.settings/.SettingsActivity' ;;
-              android.settings.WIFI_SETTINGS) value='com.amazon.tv.settings/.wifi.WifiSettingsActivity' ;;
-              android.settings.MANAGE_APPLICATIONS_SETTINGS) value='com.amazon.tv.settings/.applications.ManageApplicationsActivity' ;;
-              android.settings.CONTROLLERS_SETTINGS) value='com.amazon.tv.settings/.controllers.ControllersActivity' ;;
-              android.settings.DEVICE_INFO_SETTINGS) value='com.amazon.tv.settings/.device.DeviceInfoSettingsActivity' ;;
-              android.settings.ACCESSIBILITY_SETTINGS) value='com.amazon.tv.settings/.accessibility.AccessibilitySettingsActivity' ;;
-              android.settings.DISPLAY_SETTINGS) value='com.amazon.tv.settings/.display.DisplaySettingsActivity' ;;
-              com.amazon.device.settings.action.DATE_TIME) value='com.amazon.tv.settings/.date.DateTimeSettingsActivity' ;;
-              com.amazon.device.settings.action.LANGUAGE) value='com.amazon.tv.settings/.locale.LocaleSettingsActivity' ;;
-              android.intent.action.MAIN) value=${FAKE_HOME_RESOLVER:-com.amazon.tv.launcher/.HomeActivity} ;;
-              *) printf 'unknown fake resolver action: %s\n' "$action" >&2; exit 64 ;;
-            esac
+            value=$(settings_route "$action") || { printf 'unknown fake resolver action: %s\n' "$action" >&2; exit 64; }
             ;;
           install-existing)
             [ "${4:-}" = "--user" ] && [ "${5:-}" = "0" ] && [ -n "${6:-}" ] || {
@@ -246,37 +280,82 @@ case "$1" in
     ;;
   pidof)
     [ "${2:-}" = adbd ] || { printf 'unsupported fake pidof command: %s\n' "$*" >&2; exit 64; }
-    value=${FAKE_ADBD_PID:-123}
+    if [ "${FAKE_ADBD_PID:-}" = stopped ]; then value=; else value=${FAKE_ADBD_PID:-123}; fi
     ;;
   netstat)
     [ "${2:-}" = "-ltn" ] || { printf 'unsupported fake netstat command: %s\n' "$*" >&2; exit 64; }
     value=${FAKE_NETSTAT:-'tcp        0      0 0.0.0.0:8009            0.0.0.0:*               LISTEN'}
     ;;
-  dumpsys)
-    [ "${2:-}" = package ] && [ "${3:-}" = com.wolf.firelauncher ] || {
-      printf 'unsupported fake dumpsys command: %s\n' "$*" >&2
-      exit 64
-    }
-    if [ -n "${FAKE_WOLF_STATE:-}" ] && [ -f "$FAKE_WOLF_STATE" ]; then
-      read -r wolf_version_code wolf_version_name < "$FAKE_WOLF_STATE"
-    else
-      wolf_version_code=${FAKE_WOLF_INSTALLED_VERSION_CODE:-11723945}
-      wolf_version_name=${FAKE_WOLF_INSTALLED_VERSION_NAME:-0.1.7-FireTV}
-    fi
-    if [ "${FAKE_WOLF_DUMPSYS_INDENT:-no}" = yes ]; then
-      value="    versionCode=$wolf_version_code minSdk=21 targetSdk=29
-    versionName=$wolf_version_name"
-    else
-      value="versionCode=$wolf_version_code minSdk=21 targetSdk=29
-versionName=$wolf_version_name"
-    fi
-    ;;
   am)
-    [ "${2:-}" = start ] && [ "${3:-}" = -n ] && [ "${4:-}" = com.wolf.firelauncher/.screens.launcher.LauncherActivity ] || {
+    if [ "${2:-}" = start ] && [ "${3:-}" = -n ] && [ "${4:-}" = com.wolf.firelauncher/.screens.launcher.LauncherActivity ]; then
+      value='Starting: Intent { cmp=com.wolf.firelauncher/.screens.launcher.LauncherActivity }'
+    elif [ "${2:-}" = start ] && [ "${3:-}" = -a ] && [ -n "${4:-}" ]; then
+      action=${4}
+      case "$action" in
+        android.settings.SETTINGS|android.settings.ACCESSIBILITY_SETTINGS|android.settings.DISPLAY_SETTINGS|com.amazon.device.settings.action.DATE_TIME|com.amazon.device.settings.action.LANGUAGE)
+          write_ui_state "protected:$action"
+          printf '%s\n' 'Permission Denial: starting Intent requires com.amazon.tv.permission.LAUNCHER_SETTINGS' >&2
+          exit 1
+          ;;
+        *)
+          settings_route "$action" >/dev/null || { printf 'unknown fake Settings action: %s\n' "$action" >&2; exit 64; }
+          write_ui_state "direct:$action"
+          value="Starting: Intent { act=$action }"
+          ;;
+      esac
+    else
       printf 'unsupported fake am command: %s\n' "$*" >&2
       exit 64
-    }
-    value='Starting: Intent { cmp=com.wolf.firelauncher/.screens.launcher.LauncherActivity }'
+    fi
+    ;;
+  input)
+    [ "${2:-}" = keyevent ] || { printf 'unsupported fake input command: %s\n' "$*" >&2; exit 64; }
+    state=$(read_ui_state 2>/dev/null || true)
+    case "$state" in
+      protected:*) write_ui_state "stock-menu:${state#protected:}" ;;
+    esac
+    value=
+    ;;
+  dumpsys)
+    if [ "${2:-}" = window ] && [ "${3:-}" = windows ]; then
+      state=$(read_ui_state 2>/dev/null || true)
+      action=${state#*:}
+      [ "$action" != "$state" ] || action=
+      focus=$(ui_focus_for_action "$action")
+      value="mCurrentFocus=Window{0 u0 $focus}"
+    else
+      [ "${2:-}" = package ] && [ "${3:-}" = com.wolf.firelauncher ] || {
+        printf 'unsupported fake dumpsys command: %s\n' "$*" >&2
+        exit 64
+      }
+      if [ -n "${FAKE_WOLF_STATE:-}" ] && [ -f "$FAKE_WOLF_STATE" ]; then
+        read -r wolf_version_code wolf_version_name < "$FAKE_WOLF_STATE"
+      else
+        wolf_version_code=${FAKE_WOLF_INSTALLED_VERSION_CODE:-11723945}
+        wolf_version_name=${FAKE_WOLF_INSTALLED_VERSION_NAME:-0.1.7-FireTV}
+      fi
+      if [ "${FAKE_WOLF_DUMPSYS_INDENT:-no}" = yes ]; then
+        value="    versionCode=$wolf_version_code minSdk=21 targetSdk=29
+    versionName=$wolf_version_name"
+      else
+        value="versionCode=$wolf_version_code minSdk=21 targetSdk=29
+versionName=$wolf_version_name"
+      fi
+    fi
+    ;;
+  uiautomator)
+    [ "${2:-}" = dump ] && [ "${3:-}" = /sdcard/mantis-ui-smoke.xml ] || { printf 'unsupported fake uiautomator command: %s\n' "$*" >&2; exit 64; }
+    value='UI hierchary dumped to: /sdcard/mantis-ui-smoke.xml'
+    ;;
+  cat)
+    [ "${2:-}" = /sdcard/mantis-ui-smoke.xml ] || { printf 'unsupported fake cat command: %s\n' "$*" >&2; exit 64; }
+    state=$(read_ui_state 2>/dev/null || true)
+    action=${state#*:}
+    if [ "$action" = "${FAKE_UI_EMPTY_ACTION:-}" ]; then value='<hierarchy></hierarchy>'; else value='<hierarchy><node text="Settings" /></hierarchy>'; fi
+    ;;
+  rm)
+    [ "${2:-}" = -f ] && [ "${3:-}" = /sdcard/mantis-ui-smoke.xml ] || { printf 'unsupported fake rm command: %s\n' "$*" >&2; exit 64; }
+    value=
     ;;
   *)
     printf 'unsupported fake adb shell command: %s\n' "$*" >&2

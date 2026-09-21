@@ -14,7 +14,7 @@ OUTPUT=
 CR=$(printf '\r')
 
 usage() {
-  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--output DIR] [--yes] audit|plan|apply|install-wolf|restore BACKUP_DIRECTORY' >&2
+  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--output DIR] [--yes] audit|plan|apply|install-wolf|restore BACKUP_DIRECTORY|verify|verify-settings' >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -268,16 +268,26 @@ write_device_snapshot() {
 write_settings_route_resolvers() {
   audit_file=$1
   : > "$audit_file"
-  for action in \
-    android.settings.SETTINGS android.settings.WIFI_SETTINGS \
-    android.settings.MANAGE_APPLICATIONS_SETTINGS android.settings.CONTROLLERS_SETTINGS \
-    android.settings.DEVICE_INFO_SETTINGS android.settings.ACCESSIBILITY_SETTINGS \
-    android.settings.DISPLAY_SETTINGS com.amazon.device.settings.action.DATE_TIME \
-    com.amazon.device.settings.action.LANGUAGE
-  do
+  settings_route_lines | while IFS='|' read -r action expected_component expected_focus route_kind; do
     read_shell cmd package resolve-activity --brief -a "$action" || return 1
     printf '%s=%s\n' "$action" "$ACTUAL" >> "$audit_file"
   done
+}
+
+# action|resolved component|expected visible component|access path
+settings_route_lines() {
+  cat <<'EOF'
+android.settings.SETTINGS|com.amazon.tv.launcher/.ui.SettingsActivity|com.amazon.tv.launcher/.ui.MainSettingsActivity|stock-menu
+android.settings.WIFI_SETTINGS|com.amazon.tv.settings.v2/.tv.network.NetworkActivity|com.amazon.tv.settings.v2/.tv.network.NetworkActivity|shell
+android.settings.MANAGE_APPLICATIONS_SETTINGS|com.amazon.tv.settings.v2/.tv.applications.ApplicationsActivity|com.amazon.tv.settings.v2/.tv.applications.ApplicationsActivity|shell
+android.settings.CONTROLLERS_SETTINGS|com.amazon.tv.settings.v2/.tv.controllers_bluetooth_devices.ControllersAndBluetoothActivity|com.amazon.tv.settings.v2/.tv.controllers_bluetooth_devices.ControllersAndBluetoothActivity|shell
+android.settings.DEVICE_INFO_SETTINGS|com.amazon.tv.settings.v2/.tv.device.DeviceActivity|com.amazon.tv.settings.v2/.tv.device.DeviceActivity|shell
+android.settings.ACCESSIBILITY_SETTINGS|com.amazon.tv.settings.v2/.tv.accessibility.AccessibilityActivity|com.amazon.tv.settings.v2/.tv.accessibility.AccessibilityActivity|stock-menu
+android.settings.DISPLAY_SETTINGS|com.amazon.tv.settings.v2/.tv.display_sounds.DisplayAndSoundsActivity|com.amazon.tv.settings.v2/.tv.display_sounds.DisplayAndSoundsActivity|stock-menu
+com.amazon.device.settings.action.DATE_TIME|com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity|com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity|stock-menu
+com.amazon.device.settings.action.LANGUAGE|com.amazon.tv.settings.v2/.tv.preferences.LanguageSelectActivity|com.amazon.tv.settings.v2/.tv.preferences.LanguageSelectActivity|stock-menu
+android.settings.APPLICATION_DEVELOPMENT_SETTINGS|com.amazon.tv.settings.v2/.tv.device.DeviceActivity|com.amazon.tv.settings.v2/.tv.device.DeviceActivity|shell
+EOF
 }
 
 write_restore_script() {
@@ -561,19 +571,173 @@ require_wolf_ready() {
 }
 
 require_settings_routes() {
-  for settings_action in \
-    android.settings.SETTINGS android.settings.WIFI_SETTINGS \
-    android.settings.MANAGE_APPLICATIONS_SETTINGS android.settings.CONTROLLERS_SETTINGS \
-    android.settings.DEVICE_INFO_SETTINGS android.settings.ACCESSIBILITY_SETTINGS \
-    android.settings.DISPLAY_SETTINGS com.amazon.device.settings.action.DATE_TIME \
-    com.amazon.device.settings.action.LANGUAGE
-  do
-    read_shell cmd package resolve-activity --brief -a "$settings_action" || return 1
-    [ -n "$ACTUAL" ] || {
-      printf 'guard has no Settings route resolver: %s\n' "$settings_action" >&2
-      return 1
+  settings_route_lines | while IFS='|' read -r settings_action expected_component expected_focus route_kind; do
+    read_shell cmd package resolve-activity --brief -a "$settings_action" || exit 1
+    [ "$ACTUAL" = "$expected_component" ] || {
+      printf 'Settings resolver expected=%s actual=%s action=%s\n' "$expected_component" "$ACTUAL" "$settings_action" >&2
+      exit 1
     }
   done
+}
+
+verify_active_packages() {
+  active_package_list || return 1
+  require_preserved_active_packages "$ACTIVE_PACKAGES" || return 1
+  require_active_packages "$ACTIVE_PACKAGES" ar.tvplayer.tv com.wireguard.android tv.sweet.tvplayer || return 1
+}
+
+verify_value() {
+  verify_label=$1
+  verify_expected=$2
+  shift 2
+  read_guard_value "$verify_label" "$@" || return 1
+  [ "$GUARD_VALUE" = "$verify_expected" ] || {
+    printf 'verify %s expected=%s actual=%s\n' "$verify_label" "$verify_expected" "$GUARD_VALUE" >&2
+    return 1
+  }
+}
+
+verify_usb_adb() {
+  verify_label=$1
+  shift
+  read_guard_value "$verify_label" "$@" || return 1
+  require_usb_adb "$GUARD_VALUE" || {
+    printf 'verify requires USB configuration containing adb: %s\n' "$GUARD_VALUE" >&2
+    return 1
+  }
+}
+
+verify_tcp_8009() {
+  require_tcp_8009 || return 1
+  printf '%s\n' 'TCP8009=PASS'
+  # A listener is only transport evidence. It cannot establish that a person
+  # or a non-ADB remote successfully moved the live Fire TV UI.
+  printf '%s\n' 'NETWORK_REMOTE_OBSERVED=UNVERIFIED'
+}
+
+verify_adb_persistence() {
+  verify_value adb_enabled 1 settings get global adb_enabled || return 1
+  # Fire OS on this target legitimately reports no value for this setting.
+  verify_value development_settings_enabled null settings get global development_settings_enabled || return 1
+  verify_value init.svc.adbd running getprop init.svc.adbd || {
+    printf '%s\n' 'verify adbd is not running' >&2
+    return 1
+  }
+  verify_usb_adb persist.sys.usb.config getprop persist.sys.usb.config || return 1
+  verify_usb_adb sys.usb.config getprop sys.usb.config || return 1
+  verify_value service.adb.tcp.port 5555 getprop service.adb.tcp.port || return 1
+  verify_value persist.adb.tcp.port 5555 getprop persist.adb.tcp.port || return 1
+  read_adb_transport || return 1
+  [ "$GUARD_VALUE" = device ] || {
+    printf 'verify TCP 5555 is not reachable: %s\n' "$GUARD_VALUE" >&2
+    return 1
+  }
+  printf '%s\n' 'ADB_PERSISTENCE=PASS'
+  # USB properties prove configuration only. Enumeration needs an independent
+  # physical-host observation and is intentionally not inferred here.
+  printf '%s\n' 'USB_PHYSICAL_ENUMERATION=UNVERIFIED'
+}
+
+verify_vpn_and_locale() {
+  verify_value locale en-US getprop persist.sys.locale || return 1
+  verify_value system_locales en-US getprop system_locales || return 1
+  verify_value always_on_vpn_app com.wireguard.android settings get secure always_on_vpn_app || return 1
+  verify_value always_on_vpn_lockdown 1 settings get secure always_on_vpn_lockdown || return 1
+  capture_tun0_state
+  [ "$GUARD_TUN0_STATE" != absent ] || {
+    printf '%s\n' 'verify tun0 expected=present actual=absent' >&2
+    return 1
+  }
+}
+
+verify() {
+  require_target
+  validate_manifests
+  verify_active_packages || exit 1
+  require_wolf_ready || exit 1
+  read_guard_value bluetooth_on settings get global bluetooth_on || exit 1
+  [ "$GUARD_VALUE" = 1 ] || {
+    printf 'verify bluetooth_on expected=1 actual=%s\n' "$GUARD_VALUE" >&2
+    exit 1
+  }
+  verify_vpn_and_locale || exit 1
+  require_home_resolver || exit 1
+  require_settings_routes || exit 1
+  verify_adb_persistence || exit 1
+  verify_tcp_8009 || exit 1
+  printf '%s\n' 'SETTINGS_ROUTES=PASS'
+  printf '%s\n' 'VERIFY_GATE=PASS'
+}
+
+start_settings_action() {
+  settings_action=$1
+  if SETTINGS_START_OUTPUT=$(adb_shell am start -a "$settings_action" 2>&1); then
+    SETTINGS_START_STATUS=0
+  else
+    SETTINGS_START_STATUS=$?
+  fi
+}
+
+assert_settings_ui() {
+  settings_action=$1
+  expected_focus=$2
+  read_shell dumpsys window windows || return 1
+  case "$ACTUAL" in
+    *"$expected_focus"*) ;;
+    *) printf 'Settings focus expected=%s actual=%s action=%s\n' "$expected_focus" "$ACTUAL" "$settings_action" >&2; return 1 ;;
+  esac
+  read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || return 1
+  read_shell cat /sdcard/mantis-ui-smoke.xml || return 1
+  case "$ACTUAL" in
+    *'<hierarchy'*'<node '*'</hierarchy>'*) ;;
+    *) printf 'Settings UI hierarchy was empty: %s\n' "$settings_action" >&2; return 1 ;;
+  esac
+  adb_shell rm -f /sdcard/mantis-ui-smoke.xml >/dev/null 2>&1 || true
+  adb_shell input keyevent 4 >/dev/null 2>&1 || true
+}
+
+stock_menu_settings_navigation() {
+  # The component resolver remains the identity check. These key events keep
+  # protected routes within stock UI; no shell settings launch or setting write
+  # is attempted. A changed layout fails the subsequent focused-UI assertion.
+  adb_shell input keyevent --longpress 3 >/dev/null || return 1
+  adb_shell input keyevent 20 >/dev/null || return 1
+  adb_shell input keyevent 23 >/dev/null || return 1
+}
+
+verify_settings() {
+  require_target
+  settings_route_lines | while IFS='|' read -r settings_action expected_component expected_focus route_kind; do
+    read_shell cmd package resolve-activity --brief -a "$settings_action" || exit 1
+    [ "$ACTUAL" = "$expected_component" ] || {
+      printf 'Settings resolver expected=%s actual=%s action=%s\n' "$expected_component" "$ACTUAL" "$settings_action" >&2
+      return 1
+    }
+    start_settings_action "$settings_action"
+    case "$route_kind:$SETTINGS_START_STATUS" in
+      shell:0) ;;
+      stock-menu:0)
+        printf 'Settings direct launch unexpectedly succeeded: %s\n' "$settings_action" >&2
+        exit 1
+        ;;
+      stock-menu:*)
+        case "$SETTINGS_START_OUTPUT" in
+          *com.amazon.tv.permission.LAUNCHER_SETTINGS*) ;;
+          *) printf 'Settings direct launch did not show stock-menu permission denial: %s\n' "$settings_action" >&2; exit 1 ;;
+        esac
+        stock_menu_settings_navigation || exit 1
+        ;;
+      *)
+        printf 'Settings action could not be opened: %s\n' "$settings_action" >&2
+        exit 1
+        ;;
+    esac
+    assert_settings_ui "$settings_action" "$expected_focus" || exit 1
+  done
+  printf '%s\n' 'SETTINGS_ROUTES=PASS'
+  printf '%s\n' 'DEVELOPER_OPTIONS=PASS'
+  printf '%s\n' 'UI_SMOKE=PASS'
+  printf '%s\n' 'VERIFY_SETTINGS=PASS'
 }
 
 require_home_resolver() {
@@ -617,7 +781,9 @@ capture_guard_baseline() {
   [ "$GUARD_ADB_ENABLED" = 1 ] || { printf 'guard adb_enabled expected=1 actual=%s\n' "$GUARD_ADB_ENABLED" >&2; return 1; }
   read_guard_value development_settings_enabled settings get global development_settings_enabled || return 1
   GUARD_DEVELOPMENT_SETTINGS_ENABLED=$GUARD_VALUE
-  [ "$GUARD_DEVELOPMENT_SETTINGS_ENABLED" = 1 ] || { printf 'guard development_settings_enabled expected=1 actual=%s\n' "$GUARD_DEVELOPMENT_SETTINGS_ENABLED" >&2; return 1; }
+  # Fire OS on the supported build returns null while the stock Developer
+  # Options screen remains accessible. Capture the observed value and require
+  # it to stay unchanged after every package operation.
   read_guard_value persist_sys_usb_config getprop persist.sys.usb.config || return 1
   GUARD_PERSIST_USB_CONFIG=$GUARD_VALUE
   require_usb_adb "$GUARD_PERSIST_USB_CONFIG" || return 1
@@ -1060,6 +1226,12 @@ case "$COMMAND" in
     ;;
   restore)
     restore_backup
+    ;;
+  verify)
+    verify
+    ;;
+  verify-settings)
+    verify_settings
     ;;
   *)
     usage
