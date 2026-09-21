@@ -3,7 +3,10 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mantis-tool-tests.XXXXXX")
-MANIFEST_REMOVE="$ROOT/manifests/remove-user0.txt"
+TEST_MANIFEST_DIR="$TEST_TMP/manifests"
+cp -R "$ROOT/manifests" "$TEST_MANIFEST_DIR"
+export MANTIS_MANIFEST_DIR="$TEST_MANIFEST_DIR"
+MANIFEST_REMOVE="$TEST_MANIFEST_DIR/remove-user0.txt"
 ORIGINAL_REMOVE=
 ORIGINAL_REMOVE="$TEST_TMP/remove-user0-original.txt"
 cp "$MANIFEST_REMOVE" "$ORIGINAL_REMOVE"
@@ -99,7 +102,7 @@ run_tool() {
 
 run_verify() {
   : > "$FAKE_ADB_LOG"
-  if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 verify >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
+  if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 --baseline "$VERIFY_BASELINE" verify >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
     STATUS=0
   else
     STATUS=$?
@@ -256,6 +259,7 @@ assert_contains "$(cat "$FAKE_ADB_LOG")" '-s test-host:5555 shell getprop ro.pro
 # Break caught: removing audit publication would leave no restorable baseline.
 AUDIT_DIR="$TEST_TMP/audit"
 run_tool --output "$AUDIT_DIR" audit || fail "audit publication failed: $ERR"
+VERIFY_BASELINE=$AUDIT_DIR
 assert_file "$AUDIT_DIR/device.txt"
 assert_file "$AUDIT_DIR/packages-active.txt"
 assert_file "$AUDIT_DIR/packages-uninstalled.txt"
@@ -759,6 +763,20 @@ assert_contains "$OUT" 'SETTINGS_ROUTES=PASS'
 assert_contains "$OUT" 'ADB_PERSISTENCE=PASS'
 assert_contains "$OUT" 'TCP8009=PASS'
 assert_contains "$OUT" 'NETWORK_REMOTE_OBSERVED=UNVERIFIED'
+
+# Break caught: the selected USB transport is not evidence that the independent
+# network ADB connection remains usable.
+if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial usb-primary \
+  --network-serial network-check:5555 --baseline "$VERIFY_BASELINE" verify >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
+  STATUS=0
+else STATUS=$?; fi
+[ "$STATUS" -eq 0 ] || fail "USB primary with healthy network ADB failed: $(cat "$TEST_TMP/err")"
+assert_contains "$(cat "$TEST_TMP/out")" 'NETWORK_ADB_SERIAL=network-check:5555'
+if FAKE_NETWORK_ADB_STATE=offline "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial usb-primary \
+  --network-serial network-check:5555 --baseline "$VERIFY_BASELINE" verify >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
+  fail 'verify accepted an offline independent network transport'
+fi
+assert_contains "$(cat "$TEST_TMP/err")" 'verify TCP 5555 is not reachable: offline'
 
 # Break caught: every exact route must resolve and render, including the
 # Developer Options screen that preserves ADB Debugging access.

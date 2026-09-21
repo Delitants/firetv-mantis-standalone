@@ -7,11 +7,15 @@ AAPT=aapt
 APKSIGNER=apksigner
 SHA256_TOOL=
 SERIAL=
+NETWORK_SERIAL=
 YES=no
 COMMAND=
 COMMAND_ARG=
 OUTPUT=
+BASELINE=
 CR=$(printf '\r')
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+MANIFEST_DIR=${MANTIS_MANIFEST_DIR:-$SCRIPT_DIR/../manifests}
 
 usage() {
   printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--output DIR] [--yes] audit|plan|apply|install-wolf|restore BACKUP_DIRECTORY|verify|verify-settings' >&2
@@ -49,6 +53,11 @@ while [ "$#" -gt 0 ]; do
       SERIAL=$2
       shift 2
       ;;
+    --network-serial)
+      [ "$#" -ge 2 ] || { usage; exit 64; }
+      NETWORK_SERIAL=$2
+      shift 2
+      ;;
     --yes)
       YES=yes
       shift
@@ -56,6 +65,11 @@ while [ "$#" -gt 0 ]; do
     --output)
       [ "$#" -ge 2 ] || { usage; exit 64; }
       OUTPUT=$2
+      shift 2
+      ;;
+    --baseline)
+      [ "$#" -ge 2 ] || { usage; exit 64; }
+      BASELINE=$2
       shift 2
       ;;
     --help|-h)
@@ -90,10 +104,10 @@ adb_cmd() {
 adb_shell() {
   adb_cmd shell "$@"
 }
+network_adb_cmd() { "$ADB" -s "${NETWORK_SERIAL:-$SERIAL}" "$@"; }
 
 validate_manifests() {
-  script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-  python3 -B "$script_dir/../tests/verify-manifests.py" "$script_dir/../manifests"
+  python3 -B "$SCRIPT_DIR/../tests/verify-manifests.py" "$MANIFEST_DIR"
 }
 
 strip_one_trailing_cr() {
@@ -274,6 +288,29 @@ write_settings_route_resolvers() {
   done
 }
 
+write_verification_baseline() {
+  audit_file=$1
+  : > "$audit_file"
+  for key in persist.sys.locale system_locales persist.adb.tcp.port; do
+    read_shell getprop "$key" || return 1
+    printf '%s=%s\n' "$key" "$ACTUAL" >> "$audit_file"
+  done
+  for key in always_on_vpn_app always_on_vpn_lockdown; do
+    read_shell settings get secure "$key" || return 1
+    printf '%s=%s\n' "$key" "$ACTUAL" >> "$audit_file"
+  done
+  if read_shell ip link show tun0; then
+    printf 'tun0=present\n' >> "$audit_file"
+  else
+    printf 'tun0=absent\n' >> "$audit_file"
+  fi
+}
+
+write_tun0_capture() {
+  audit_file=$1
+  if read_shell ip link show tun0; then printf '%s\n' "$ACTUAL" > "$audit_file"; else printf '%s\n' absent > "$audit_file"; fi
+}
+
 # action|resolved component|expected visible component|access path
 settings_route_lines() {
   cat <<'EOF'
@@ -419,10 +456,11 @@ publish_audit() {
     ! write_shell_capture "$work_dir/packages-active.txt" pm list packages ||
     ! write_shell_capture "$work_dir/packages-uninstalled.txt" pm list packages -u ||
     ! write_shell_capture "$work_dir/packages-disabled.txt" pm list packages -d ||
-    ! cat "$script_dir/../manifests/preserve-core.txt" "$script_dir/../manifests/preserve-user-apps.txt" | LC_ALL=C sort -u > "$work_dir/protected-apps.txt" ||
+    ! cat "$MANIFEST_DIR/preserve-core.txt" "$MANIFEST_DIR/preserve-user-apps.txt" | LC_ALL=C sort -u > "$work_dir/protected-apps.txt" ||
     ! write_shell_capture "$work_dir/home-directory.txt" printenv HOME ||
     ! write_labeled_shell_capture "$work_dir/bluetooth.txt" bluetooth_on settings get global bluetooth_on ||
-    ! write_shell_capture "$work_dir/tun0.txt" ip link show tun0 ||
+    ! write_tun0_capture "$work_dir/tun0.txt" ||
+    ! write_verification_baseline "$work_dir/verification-baseline.txt" ||
     ! write_settings_route_resolvers "$work_dir/settings-route-resolvers.txt" ||
     ! write_shell_capture "$work_dir/home-resolver.txt" cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME ||
     ! write_restore_script "$work_dir/restore-user0.sh" "$RESTORE_CAPABILITY" ||
@@ -505,7 +543,7 @@ require_active_packages() {
 require_preserved_active_packages() {
   active_packages=$1
   script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-  for preserve_manifest in "$script_dir/../manifests/preserve-core.txt" "$script_dir/../manifests/preserve-user-apps.txt"; do
+  for preserve_manifest in "$MANIFEST_DIR/preserve-core.txt" "$MANIFEST_DIR/preserve-user-apps.txt"; do
     while IFS= read -r required_package; do
       package_list_contains "$active_packages" "$required_package" || {
         printf 'guard missing active package: %s\n' "$required_package" >&2
@@ -534,7 +572,7 @@ read_guard_value() {
 }
 
 read_adb_transport() {
-  if ! GUARD_VALUE=$(adb_cmd get-state); then
+  if ! GUARD_VALUE=$(network_adb_cmd get-state); then
     printf '%s\n' 'guard could not reach TCP adb transport' >&2
     return 1
   fi
@@ -567,6 +605,12 @@ require_wolf_ready() {
   case "$wolf_launch" in
     *'Starting: Intent'*) ;;
     *) printf '%s\n' 'Wolf Launcher direct launch did not report a launch intent' >&2; return 1 ;;
+  esac
+  read_shell dumpsys window windows || return 1
+  wolf_focus=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
+  case "$wolf_focus" in
+    "$WOLF_COMPONENT"|"$WOLF_PACKAGE/$WOLF_PACKAGE.${WOLF_ACTIVITY#*.}") ;;
+    *) printf 'Wolf Launcher focus expected=%s actual=%s\n' "$WOLF_COMPONENT" "$wolf_focus" >&2; return 1 ;;
   esac
 }
 
@@ -626,26 +670,36 @@ verify_adb_persistence() {
   verify_usb_adb persist.sys.usb.config getprop persist.sys.usb.config || return 1
   verify_usb_adb sys.usb.config getprop sys.usb.config || return 1
   verify_value service.adb.tcp.port 5555 getprop service.adb.tcp.port || return 1
-  verify_value persist.adb.tcp.port 5555 getprop persist.adb.tcp.port || return 1
+  baseline_file=$BASELINE/verification-baseline.txt
+  baseline_persist_port=$(sed -n 's/^persist.adb.tcp.port=//p' "$baseline_file" | head -n 1)
+  verify_value persist.adb.tcp.port "$baseline_persist_port" getprop persist.adb.tcp.port || return 1
   read_adb_transport || return 1
   [ "$GUARD_VALUE" = device ] || {
     printf 'verify TCP 5555 is not reachable: %s\n' "$GUARD_VALUE" >&2
     return 1
   }
   printf '%s\n' 'ADB_PERSISTENCE=PASS'
+  printf 'NETWORK_ADB_SERIAL=%s\n' "${NETWORK_SERIAL:-$SERIAL}"
   # USB properties prove configuration only. Enumeration needs an independent
   # physical-host observation and is intentionally not inferred here.
   printf '%s\n' 'USB_PHYSICAL_ENUMERATION=UNVERIFIED'
 }
 
 verify_vpn_and_locale() {
-  verify_value locale en-US getprop persist.sys.locale || return 1
-  verify_value system_locales en-US getprop system_locales || return 1
-  verify_value always_on_vpn_app com.wireguard.android settings get secure always_on_vpn_app || return 1
-  verify_value always_on_vpn_lockdown 1 settings get secure always_on_vpn_lockdown || return 1
+  [ -n "$BASELINE" ] || { printf '%s\n' '--baseline is required for verify' >&2; return 1; }
+  verify_backup_integrity "$BASELINE" || { printf '%s\n' 'baseline integrity verification failed' >&2; return 1; }
+  baseline_file=$BASELINE/verification-baseline.txt
+  [ -f "$baseline_file" ] || { printf '%s\n' 'baseline verification state is missing' >&2; return 1; }
+  baseline_value() { sed -n "s/^$1=//p" "$baseline_file" | head -n 1; }
+  verify_value locale "$(baseline_value persist.sys.locale)" getprop persist.sys.locale || return 1
+  verify_value system_locales "$(baseline_value system_locales)" getprop system_locales || return 1
+  verify_value always_on_vpn_app "$(baseline_value always_on_vpn_app)" settings get secure always_on_vpn_app || return 1
+  verify_value always_on_vpn_lockdown "$(baseline_value always_on_vpn_lockdown)" settings get secure always_on_vpn_lockdown || return 1
   capture_tun0_state
-  [ "$GUARD_TUN0_STATE" != absent ] || {
-    printf '%s\n' 'verify tun0 expected=present actual=absent' >&2
+  expected_tun=$(baseline_value tun0)
+  actual_tun=absent; [ "$GUARD_TUN0_STATE" != absent ] && actual_tun=present
+  [ "$actual_tun" = "$expected_tun" ] || {
+    printf 'verify tun0 expected=%s actual=%s\n' "$expected_tun" "$actual_tun" >&2
     return 1
   }
 }
@@ -681,11 +735,15 @@ start_settings_action() {
 assert_settings_ui() {
   settings_action=$1
   expected_focus=$2
-  read_shell dumpsys window windows || return 1
-  case "$ACTUAL" in
-    *"$expected_focus"*) ;;
-    *) printf 'Settings focus expected=%s actual=%s action=%s\n' "$expected_focus" "$ACTUAL" "$settings_action" >&2; return 1 ;;
-  esac
+  tries=0
+  while :; do
+    read_shell dumpsys window windows || return 1
+    focus=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
+    normalize_component() { case "$1" in */.*) p=${1%%/*}; printf '%s/%s.%s\n' "$p" "$p" "${1#*/.}" ;; *) printf '%s\n' "$1" ;; esac; }
+    [ "$(normalize_component "$focus")" = "$(normalize_component "$expected_focus")" ] && break
+    tries=$((tries + 1)); [ "$tries" -lt 3 ] || { printf 'Settings focus expected=%s actual=%s action=%s\n' "$expected_focus" "$focus" "$settings_action" >&2; return 1; }
+    sleep 1
+  done
   read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || return 1
   read_shell cat /sdcard/mantis-ui-smoke.xml || return 1
   case "$ACTUAL" in
@@ -700,9 +758,19 @@ stock_menu_settings_navigation() {
   # The component resolver remains the identity check. These key events keep
   # protected routes within stock UI; no shell settings launch or setting write
   # is attempted. A changed layout fails the subsequent focused-UI assertion.
+  settings_action=$1
   adb_shell input keyevent --longpress 3 >/dev/null || return 1
-  adb_shell input keyevent 20 >/dev/null || return 1
+  for n in 1 2 3 4; do adb_shell input keyevent 22 >/dev/null || return 1; done
   adb_shell input keyevent 23 >/dev/null || return 1
+  case "$settings_action" in
+    android.settings.SETTINGS) ;;
+    android.settings.DISPLAY_SETTINGS) adb_shell input keyevent 20 >/dev/null; adb_shell input keyevent 23 >/dev/null ;;
+    android.settings.ACCESSIBILITY_SETTINGS) for n in 1 2; do adb_shell input keyevent 20 >/dev/null; done; for n in 1 2; do adb_shell input keyevent 22 >/dev/null; done; adb_shell input keyevent 23 >/dev/null ;;
+    com.amazon.device.settings.action.DATE_TIME|com.amazon.device.settings.action.LANGUAGE)
+      adb_shell input keyevent 20 >/dev/null; for n in 1 2; do adb_shell input keyevent 22 >/dev/null; done; adb_shell input keyevent 23 >/dev/null
+      if [ "$settings_action" = com.amazon.device.settings.action.LANGUAGE ]; then for n in 1 2 3 4 5 6 7; do adb_shell input keyevent 20 >/dev/null; done; adb_shell input keyevent 23 >/dev/null; fi
+      ;;
+  esac
 }
 
 verify_settings() {
@@ -716,16 +784,13 @@ verify_settings() {
     start_settings_action "$settings_action"
     case "$route_kind:$SETTINGS_START_STATUS" in
       shell:0) ;;
-      stock-menu:0)
-        printf 'Settings direct launch unexpectedly succeeded: %s\n' "$settings_action" >&2
-        exit 1
-        ;;
+      stock-menu:0) stock_menu_settings_navigation "$settings_action" || exit 1 ;;
       stock-menu:*)
         case "$SETTINGS_START_OUTPUT" in
           *com.amazon.tv.permission.LAUNCHER_SETTINGS*) ;;
           *) printf 'Settings direct launch did not show stock-menu permission denial: %s\n' "$settings_action" >&2; exit 1 ;;
         esac
-        stock_menu_settings_navigation || exit 1
+        stock_menu_settings_navigation "$settings_action" || exit 1
         ;;
       *)
         printf 'Settings action could not be opened: %s\n' "$settings_action" >&2
@@ -807,7 +872,7 @@ capture_guard_baseline() {
   require_home_resolver || return 1
   require_tcp_8009 || return 1
   require_settings_routes || return 1
-  case "$SERIAL" in
+  case "${NETWORK_SERIAL:-$SERIAL}" in
     *:5555) ;;
     *) printf 'guard requires a TCP adb serial ending in :5555\n' >&2; return 1 ;;
   esac
@@ -907,7 +972,7 @@ validate_recorded_package() {
     ''|*[!A-Za-z0-9._]*) return 1 ;;
   esac
   script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-  awk -v package="$recorded_candidate" '$0 == package { found = 1 } END { exit found ? 0 : 1 }' "$script_dir/../manifests/remove-user0.txt"
+  awk -v package="$recorded_candidate" '$0 == package { found = 1 } END { exit found ? 0 : 1 }' "$MANIFEST_DIR/remove-user0.txt"
 }
 
 recorded_package_exists() {
@@ -1011,7 +1076,7 @@ plan() {
   script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
   while IFS= read -r package; do
     printf 'REMOVE=%s RESTORE=%s --user 0 %s\n' "$package" "$plan_restore" "$package"
-  done < "$script_dir/../manifests/remove-user0.txt"
+  done < "$MANIFEST_DIR/remove-user0.txt"
   printf '%s\n' 'PLAN=PASS'
 }
 
@@ -1078,7 +1143,7 @@ apply() {
       printf '%s\n' 'guard failure restored the current batch while ADB remained reachable' >&2
       exit 1
     fi
-  done < "$script_dir/../manifests/remove-user0.txt"
+  done < "$MANIFEST_DIR/remove-user0.txt"
   printf 'APPLY_OUTPUT=%s\n' "$backup_dir"
   printf '%s\n' 'APPLY=PASS'
 }
