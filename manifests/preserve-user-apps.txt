@@ -1,0 +1,4 @@
+ar.tvplayer.tv
+com.wireguard.android
+tv.sweet.tvplayer
+com.wolf.firelauncher

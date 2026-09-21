@@ -54,6 +54,11 @@ adb_shell() {
   adb_cmd shell "$@"
 }
 
+validate_manifests() {
+  script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+  python3 -B "$script_dir/../tests/verify-manifests.py" "$script_dir/../manifests"
+}
+
 strip_one_trailing_cr() {
   NORMALIZED=$1
   case "$NORMALIZED" in

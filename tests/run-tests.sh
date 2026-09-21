@@ -54,4 +54,6 @@ FAKE_MODEL=$(printf 'AFTMM\r') run_tool audit
 [ "$STATUS" -eq 0 ] || fail 'audit rejected a trailing CR'
 assert_contains "$OUT" 'SUPPORTED_MUTATION_TARGET=YES'
 
+python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
+
 printf '%s\n' 'PASS: target gate tests'
