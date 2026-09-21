@@ -190,6 +190,7 @@ prepare_package_state() {
   FAKE_PACKAGE_STATE=$TEST_TMP/package-state
   export FAKE_PACKAGE_STATE
   : > "$FAKE_PACKAGE_STATE"
+  rm -f "$FAKE_PACKAGE_STATE.enable-occurred"
   for preserve_manifest in "$ROOT/manifests/preserve-core.txt" "$ROOT/manifests/preserve-user-apps.txt"; do
     while IFS= read -r package; do
       printf 'active %s\n' "$package" >> "$FAKE_PACKAGE_STATE"
@@ -733,6 +734,22 @@ assert_contains "$ERR" 'guard changed adb_enabled'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'get-state'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
 assert_contains "$(cat "$PACKAGE_ADB_GUARD_DIR/operation-journal.txt")" 'guard-failure com.amazon.android.marketplace'
+
+# Break caught: apply must never claim the batch was restored when the inverse
+# itself fails a compact guard. Keep the recovery ledger and publish its path.
+PACKAGE_ROLLBACK_GUARD_DIR="$TEST_TMP/apply-rollback-guard"
+prepare_package_state
+set_wolf_ready
+FAKE_AFTER_DISABLE_ADB_ENABLED=0 \
+FAKE_AFTER_ENABLE_BLUETOOTH_ON=0 \
+  run_tool --output "$PACKAGE_ROLLBACK_GUARD_DIR" --yes apply &&
+  fail 'apply accepted a failed guard rollback'
+assert_contains "$ERR" 'rollback incomplete'
+assert_contains "$ERR" "$PACKAGE_ROLLBACK_GUARD_DIR"
+assert_not_contains "$ERR" 'restored'
+assert_not_contains "$ERR" 'reboot'
+assert_contains "$(cat "$PACKAGE_ROLLBACK_GUARD_DIR/disabled-successfully.txt")" 'com.amazon.android.marketplace'
+verify_checksums "$PACKAGE_ROLLBACK_GUARD_DIR" || fail 'failed guard rollback left stale checksums'
 
 # Break caught: a partial rollback must remove each confirmed restore from the ledger and refresh the checksum before trying the next one.
 PACKAGE_PARTIAL_ROLLBACK_DIR="$TEST_TMP/apply-partial-rollback"

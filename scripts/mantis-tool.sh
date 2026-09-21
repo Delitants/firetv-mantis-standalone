@@ -1321,9 +1321,15 @@ apply() {
     apply_guard_package=$package
     if ! compact_guard; then
       printf 'guard-failure %s\n' "$apply_guard_package" >> "$journal_file"
-      rollback_batch '' "$removed_file" "$journal_file" || true
-      refresh_backup_checksums "$backup_dir" || true
-      printf '%s\n' 'guard failure restored the current batch while ADB remained reachable' >&2
+      if rollback_batch '' "$removed_file" "$journal_file" &&
+        [ ! -s "$removed_file" ] &&
+        refresh_backup_checksums "$backup_dir"
+      then
+        printf '%s\n' 'guard failure restored the current batch while ADB remained reachable' >&2
+      else
+        refresh_backup_checksums "$backup_dir" || true
+        printf 'guard failure rollback incomplete; recovery backup preserved at %s\n' "$backup_dir" >&2
+      fi
       exit 1
     fi
   done < "$MANIFEST_DIR/remove-user0.txt"
