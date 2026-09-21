@@ -240,11 +240,15 @@ capture_package_help() {
 
 help_proves_pm_state_command() {
   printf '%s\n' "$1" | awk -v command="$2" '
-    $1 == command {
+    {
+      command_field = 0
+      if ($1 == command) command_field = 1
+      else if ($1 == "pm" && $2 == command) command_field = 2
+      if (!command_field) next
       usage = 1
       user = 0
       package = 0
-      for (field = 2; field <= NF; field++) {
+      for (field = command_field + 1; field <= NF; field++) {
         token = $field
         gsub(/^\[/, "", token)
         gsub(/\]$/, "", token)

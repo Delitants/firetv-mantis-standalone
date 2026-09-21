@@ -402,23 +402,23 @@ assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
 assert_contains "$OUT" 'PACKAGE_RESTORE=pm enable --user 0'
 PM_NONZERO_AUDIT_DIR="$TEST_TMP/audit-pm-nonzero"
 FAKE_PM_HELP_STATUS=1 \
-FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
-enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+FAKE_PM_HELP='pm enable [--user USER_ID] PACKAGE_OR_COMPONENT
+pm disable-user [--user USER_ID] PACKAGE_OR_COMPONENT' \
   run_tool --output "$PM_NONZERO_AUDIT_DIR" audit || fail "nonzero pm capability audit failed: $ERR"
 assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
 assert_contains "$OUT" 'PACKAGE_RESTORE=pm enable --user 0'
 PM_NONZERO_OFFLINE_AUDIT_DIR="$TEST_TMP/audit-pm-nonzero-offline"
 FAKE_ADB_STATE=offline \
 FAKE_PM_HELP_STATUS=1 \
-FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
-enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+FAKE_PM_HELP='pm enable [--user USER_ID] PACKAGE_OR_COMPONENT
+pm disable-user [--user USER_ID] PACKAGE_OR_COMPONENT' \
   run_tool --output "$PM_NONZERO_OFFLINE_AUDIT_DIR" audit || fail "offline nonzero pm audit failed: $ERR"
 assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
 assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
 PM_UNEXPECTED_STATUS_AUDIT_DIR="$TEST_TMP/audit-pm-unexpected-status"
 FAKE_PM_HELP_STATUS=2 \
-FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
-enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+FAKE_PM_HELP='pm enable [--user USER_ID] PACKAGE_OR_COMPONENT
+pm disable-user [--user USER_ID] PACKAGE_OR_COMPONENT' \
   run_tool --output "$PM_UNEXPECTED_STATUS_AUDIT_DIR" audit || fail "unexpected-status pm audit failed: $ERR"
 assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
 assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
@@ -485,8 +485,8 @@ PACKAGE_NONZERO_HELP_DIR="$TEST_TMP/apply-nonzero-help"
 prepare_package_state
 set_wolf_ready
 FAKE_PM_HELP_STATUS=1 \
-FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
-enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+FAKE_PM_HELP='pm enable [--user USER_ID] PACKAGE_OR_COMPONENT
+pm disable-user [--user USER_ID] PACKAGE_OR_COMPONENT' \
   run_tool --output "$PACKAGE_NONZERO_HELP_DIR" --yes apply ||
   fail "apply rejected exact nonzero pm usage: $ERR"
 assert_contains "$OUT" 'APPLY=PASS'
@@ -839,9 +839,23 @@ assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
 assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
 NONEXACT_NONZERO_HELP_AUDIT_DIR="$TEST_TMP/audit-nonexact-nonzero-help"
 FAKE_PM_HELP_STATUS=1 \
-FAKE_PM_HELP='disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
-enable [--user USER_ID] PACKAGE_OR_COMPONENT trailing-prose' \
+FAKE_PM_HELP='pm disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+pm enable [--user USER_ID] PACKAGE_OR_COMPONENT trailing-prose' \
   run_tool --output "$NONEXACT_NONZERO_HELP_AUDIT_DIR" audit || fail "nonexact nonzero help audit failed: $ERR"
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
+ARBITRARY_PREFIX_NONZERO_HELP_AUDIT_DIR="$TEST_TMP/audit-arbitrary-prefix-nonzero-help"
+FAKE_PM_HELP_STATUS=1 \
+FAKE_PM_HELP='usage pm disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+usage pm enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+  run_tool --output "$ARBITRARY_PREFIX_NONZERO_HELP_AUDIT_DIR" audit || fail "arbitrary-prefix nonzero help audit failed: $ERR"
+assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
+assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
+WRONG_PREFIX_NONZERO_HELP_AUDIT_DIR="$TEST_TMP/audit-wrong-prefix-nonzero-help"
+FAKE_PM_HELP_STATUS=1 \
+FAKE_PM_HELP='cmd disable-user [--user USER_ID] PACKAGE_OR_COMPONENT
+cmd enable [--user USER_ID] PACKAGE_OR_COMPONENT' \
+  run_tool --output "$WRONG_PREFIX_NONZERO_HELP_AUDIT_DIR" audit || fail "wrong-prefix nonzero help audit failed: $ERR"
 assert_contains "$OUT" 'PACKAGE_OPERATION=unsupported'
 assert_contains "$OUT" 'PACKAGE_RESTORE=unsupported'
 
