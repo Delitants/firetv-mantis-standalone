@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
+"""Publish one private staging directory without following raced pathnames.
+
+The shell populates the 0700 staging directory by pathname before this helper
+runs. Code running as the same effective user can already read or modify that
+controller-owned state and is outside this helper's threat boundary. The
+publish operation still pins both trusted parents, validates the source entry
+relative to its pinned parent immediately before the syscall, and never uses a
+pathname for cleanup.
+"""
+
 import ctypes
 import os
 import stat
 import sys
 
-DARWIN_AT_FDCWD = -2
 DARWIN_RENAME_EXCL = 0x00000004
-LINUX_AT_FDCWD = -100
 LINUX_RENAME_NOREPLACE = 0x00000001
 
 
@@ -18,32 +26,50 @@ def strategy(platform_name):
     raise RuntimeError(f"unsupported platform for atomic no-replace rename: {platform_name}")
 
 
-def trusted_parent(path):
+def path_parts(path):
     parent = os.path.dirname(path) or "."
+    name = os.path.basename(path)
+    if name in {"", ".", ".."}:
+        raise RuntimeError(f"unsafe publication path: {path}")
+    return parent, name
+
+
+def open_trusted_parent(path):
+    parent, name = path_parts(path)
     flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
     descriptor = os.open(parent, flags)
     try:
         opened = os.fstat(descriptor)
         named = os.lstat(parent)
-    finally:
+        if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+            raise RuntimeError(f"untrusted parent directory: {parent}")
+        if not stat.S_ISDIR(opened.st_mode) or opened.st_uid != os.geteuid() or opened.st_mode & 0o022:
+            raise RuntimeError(f"untrusted parent directory: {parent}")
+        return descriptor, name
+    except Exception:
         os.close(descriptor)
-    if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
-        raise RuntimeError(f"untrusted parent directory: {parent}")
-    if not stat.S_ISDIR(opened.st_mode) or opened.st_uid != os.geteuid() or opened.st_mode & 0o022:
-        raise RuntimeError(f"untrusted parent directory: {parent}")
+        raise
 
 
-def source_identity(source):
-    trusted_parent(source)
-    source_stat = os.lstat(source)
-    if not stat.S_ISDIR(source_stat.st_mode) or stat.S_ISLNK(source_stat.st_mode):
+def source_identity_at(parent_descriptor, name):
+    source_stat = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if not stat.S_ISDIR(source_stat.st_mode):
         raise RuntimeError("staging path is not a directory")
     if source_stat.st_uid != os.geteuid() or source_stat.st_mode & 0o777 != 0o700:
         raise RuntimeError("staging directory is not controller-private")
     return source_stat.st_dev, source_stat.st_ino
 
 
-def darwin_rename(source, destination):
+def source_identity(source):
+    parent_descriptor, name = open_trusted_parent(source)
+    try:
+        return source_identity_at(parent_descriptor, name)
+    finally:
+        os.close(parent_descriptor)
+
+
+def darwin_renamer():
     libc = ctypes.CDLL(None, use_errno=True)
     try:
         renameatx_np = libc.renameatx_np
@@ -51,10 +77,20 @@ def darwin_rename(source, destination):
         raise RuntimeError("renameatx_np with RENAME_EXCL is unavailable") from error
     renameatx_np.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     renameatx_np.restype = ctypes.c_int
-    return renameatx_np(DARWIN_AT_FDCWD, os.fsencode(source), DARWIN_AT_FDCWD, os.fsencode(destination), DARWIN_RENAME_EXCL)
+
+    def rename(source_parent, source_name, destination_parent, destination_name):
+        return renameatx_np(
+            source_parent,
+            os.fsencode(source_name),
+            destination_parent,
+            os.fsencode(destination_name),
+            DARWIN_RENAME_EXCL,
+        )
+
+    return rename
 
 
-def linux_rename(source, destination):
+def linux_renamer():
     libc = ctypes.CDLL(None, use_errno=True)
     try:
         renameat2 = libc.renameat2
@@ -63,24 +99,58 @@ def linux_rename(source, destination):
         number = syscall_numbers.get(os.uname().machine.lower())
         if number is None:
             raise RuntimeError("renameat2 syscall number is unknown for this Linux architecture")
-        return libc.syscall(number, LINUX_AT_FDCWD, os.fsencode(source), LINUX_AT_FDCWD, os.fsencode(destination), LINUX_RENAME_NOREPLACE)
+        syscall = libc.syscall
+
+        def rename(source_parent, source_name, destination_parent, destination_name):
+            return syscall(
+                number,
+                source_parent,
+                os.fsencode(source_name),
+                destination_parent,
+                os.fsencode(destination_name),
+                LINUX_RENAME_NOREPLACE,
+            )
+
+        return rename
     renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     renameat2.restype = ctypes.c_int
-    return renameat2(LINUX_AT_FDCWD, os.fsencode(source), LINUX_AT_FDCWD, os.fsencode(destination), LINUX_RENAME_NOREPLACE)
+
+    def rename(source_parent, source_name, destination_parent, destination_name):
+        return renameat2(
+            source_parent,
+            os.fsencode(source_name),
+            destination_parent,
+            os.fsencode(destination_name),
+            LINUX_RENAME_NOREPLACE,
+        )
+
+    return rename
+
+
+def load_renamer():
+    selected = strategy(sys.platform)
+    if selected == "darwin":
+        return darwin_renamer()
+    return linux_renamer()
 
 
 def publish(source, destination, expected_device, expected_inode):
-    trusted_parent(source)
-    trusted_parent(destination)
-    if source_identity(source) != (expected_device, expected_inode):
-        raise RuntimeError("staging directory changed after creation")
-    selected = strategy(sys.platform)
-    if selected == "darwin":
-        result = darwin_rename(source, destination)
-    else:
-        result = linux_rename(source, destination)
-    if result != 0:
-        raise OSError(ctypes.get_errno(), "atomic no-replace rename failed")
+    rename = load_renamer()
+    source_parent = -1
+    destination_parent = -1
+    try:
+        source_parent, source_name = open_trusted_parent(source)
+        destination_parent, destination_name = open_trusted_parent(destination)
+        if source_identity_at(source_parent, source_name) != (expected_device, expected_inode):
+            raise RuntimeError("staging directory changed after creation")
+        result = rename(source_parent, source_name, destination_parent, destination_name)
+        if result != 0:
+            raise OSError(ctypes.get_errno(), "atomic no-replace rename failed")
+    finally:
+        if destination_parent >= 0:
+            os.close(destination_parent)
+        if source_parent >= 0:
+            os.close(source_parent)
 
 
 def main():

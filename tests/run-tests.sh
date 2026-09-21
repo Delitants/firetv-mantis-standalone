@@ -278,5 +278,6 @@ esac
 restore_manifest
 
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
+python3 -B "$ROOT/tests/test-atomic-rename.py"
 
 printf '%s\n' 'PASS: target gate tests'
