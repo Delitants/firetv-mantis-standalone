@@ -99,7 +99,10 @@ case "$1" in
       global:bluetooth_on) value=${FAKE_BLUETOOTH_ON:-1} ;;
       global:adb_enabled)
         if [ -n "${FAKE_AFTER_UNINSTALL_ADB_ENABLED:-}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
-          awk '$1 == "uninstalled" || $1 == "missing" { found = 1 } END { exit !found }' "$FAKE_PACKAGE_STATE"
+          awk -v after_count="${FAKE_AFTER_UNINSTALL_ADB_ENABLED_AFTER_COUNT:-1}" '
+            $1 == "uninstalled" || $1 == "missing" { count++ }
+            END { exit !(count >= after_count) }
+          ' "$FAKE_PACKAGE_STATE"
         then
           value=$FAKE_AFTER_UNINSTALL_ADB_ENABLED
         else
@@ -146,7 +149,7 @@ case "$1" in
               android.settings.DISPLAY_SETTINGS) value='com.amazon.tv.settings/.display.DisplaySettingsActivity' ;;
               com.amazon.device.settings.action.DATE_TIME) value='com.amazon.tv.settings/.date.DateTimeSettingsActivity' ;;
               com.amazon.device.settings.action.LANGUAGE) value='com.amazon.tv.settings/.locale.LocaleSettingsActivity' ;;
-              android.intent.action.MAIN) value='com.amazon.tv.launcher/.HomeActivity' ;;
+              android.intent.action.MAIN) value=${FAKE_HOME_RESOLVER:-com.amazon.tv.launcher/.HomeActivity} ;;
               *) printf 'unknown fake resolver action: %s\n' "$action" >&2; exit 64 ;;
             esac
             ;;
@@ -155,6 +158,10 @@ case "$1" in
               printf 'invalid fake cmd install-existing command: %s\n' "$*" >&2
               exit 64
             }
+            if [ "${FAKE_INSTALL_EXISTING_FAIL_PACKAGE:-}" = "${6}" ]; then
+              printf '%s\n' 'Failure [restore failed]'
+              exit 1
+            fi
             replace_package_state "${6}" active
             value="installed ${6}"
             ;;
@@ -183,6 +190,10 @@ case "$1" in
           printf 'invalid fake pm install-existing command: %s\n' "$*" >&2
           exit 64
         }
+        if [ "${FAKE_INSTALL_EXISTING_FAIL_PACKAGE:-}" = "${5}" ]; then
+          printf '%s\n' 'Failure [restore failed]'
+          exit 1
+        fi
         replace_package_state "${5}" active
         value="installed ${5}"
         ;;
@@ -213,6 +224,12 @@ case "$1" in
           missing-uninstalled) replace_package_state "$package" missing ;;
           *) replace_package_state "$package" uninstalled ;;
         esac
+        if [ -n "${FAKE_INTERRUPT_MARKER:-}" ]; then
+          : > "$FAKE_INTERRUPT_MARKER"
+          while [ -e "$FAKE_INTERRUPT_MARKER" ]; do
+            sleep 1
+          done
+        fi
         value=${FAKE_UNINSTALL_RESULT:-Success}
         ;;
       *) printf 'unsupported fake pm command: %s\n' "$*" >&2; exit 64 ;;
@@ -230,6 +247,10 @@ case "$1" in
   pidof)
     [ "${2:-}" = adbd ] || { printf 'unsupported fake pidof command: %s\n' "$*" >&2; exit 64; }
     value=${FAKE_ADBD_PID:-123}
+    ;;
+  netstat)
+    [ "${2:-}" = "-ltn" ] || { printf 'unsupported fake netstat command: %s\n' "$*" >&2; exit 64; }
+    value=${FAKE_NETSTAT:-'tcp        0      0 0.0.0.0:8009            0.0.0.0:*               LISTEN'}
     ;;
   dumpsys)
     [ "${2:-}" = package ] && [ "${3:-}" = com.wolf.firelauncher ] || {

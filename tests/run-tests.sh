@@ -30,6 +30,8 @@ unset FAKE_ADB_ENABLED FAKE_DEVELOPMENT_SETTINGS_ENABLED FAKE_PERSIST_USB_CONFIG
 unset FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT FAKE_ADBD_PID FAKE_ALWAYS_ON_VPN_APP
 unset FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_PACKAGE_STATE FAKE_UNINSTALL_MODE FAKE_UNINSTALL_FAIL_PACKAGE
 unset FAKE_AFTER_UNINSTALL_ADB_ENABLED FAKE_UNINSTALL_RESULT
+unset FAKE_AFTER_UNINSTALL_ADB_ENABLED_AFTER_COUNT FAKE_INSTALL_EXISTING_FAIL_PACKAGE
+unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
 unset FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK FAKE_WOLF_INSTALL_LOCATION
@@ -68,6 +70,21 @@ verify_checksums() {
   fi
 }
 
+refresh_checksums() {
+  checksum_dir=$1
+  (
+    cd "$checksum_dir"
+    find . -type f ! -name SHA256SUMS -print | sed 's#^./##' | LC_ALL=C sort |
+    while IFS= read -r checksum_file; do
+      if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$checksum_file"
+      else
+        shasum -a 256 "$checksum_file"
+      fi
+    done > SHA256SUMS
+  )
+}
+
 run_tool() {
   : > "$FAKE_ADB_LOG"
   if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 "$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
@@ -75,6 +92,28 @@ run_tool() {
   else
     STATUS=$?
   fi
+  OUT=$(cat "$TEST_TMP/out")
+  ERR=$(cat "$TEST_TMP/err")
+  return "$STATUS"
+}
+
+run_tool_interrupted() {
+  : > "$FAKE_ADB_LOG"
+  "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 "$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err" &
+  TOOL_PID=$!
+  wait_count=0
+  while [ ! -e "$FAKE_INTERRUPT_MARKER" ] && [ "$wait_count" -lt 50 ]; do
+    sleep 1
+    wait_count=$((wait_count + 1))
+  done
+  [ -e "$FAKE_INTERRUPT_MARKER" ] || fail 'fake ADB did not reach the interruption point'
+  kill -TERM "$TOOL_PID"
+  if wait "$TOOL_PID"; then
+    STATUS=0
+  else
+    STATUS=$?
+  fi
+  rm -f "$FAKE_INTERRUPT_MARKER"
   OUT=$(cat "$TEST_TMP/out")
   ERR=$(cat "$TEST_TMP/err")
   return "$STATUS"
@@ -110,26 +149,18 @@ reset_wolf_fixture() {
 prepare_package_state() {
   FAKE_PACKAGE_STATE=$TEST_TMP/package-state
   export FAKE_PACKAGE_STATE
-  printf '%s\n' \
-    'active ar.tvplayer.tv' \
-    'active com.wireguard.android' \
-    'active tv.sweet.tvplayer' \
-    'active com.wolf.firelauncher' \
-    'active com.amazon.device.settings' \
-    'active com.amazon.device.settings.sdk.internal.library' \
-    'active com.amazon.tv.settings.core' \
-    'active com.amazon.tv.settings.v2' \
-    'active com.android.settings' \
-    'active com.amazon.whisperjoin.middleware.np' \
-    'active com.amazon.whisperjoin.wss.wifiprovisioner' \
-    'active com.amazon.whisperlink.core.android' \
-    'active com.amazon.whisperplay.contracts' \
-    'active com.amazon.whisperplay.service.install' \
-    'active com.amazon.android.marketplace' \
-    'active com.amazon.bueller.music' > "$FAKE_PACKAGE_STATE"
+  : > "$FAKE_PACKAGE_STATE"
+  for preserve_manifest in "$ROOT/manifests/preserve-core.txt" "$ROOT/manifests/preserve-user-apps.txt"; do
+    while IFS= read -r package; do
+      printf 'active %s\n' "$package" >> "$FAKE_PACKAGE_STATE"
+    done < "$preserve_manifest"
+  done
+  printf '%s\n' 'active com.amazon.android.marketplace' 'active com.amazon.bueller.music' >> "$FAKE_PACKAGE_STATE"
   unset FAKE_UNINSTALL_MODE FAKE_UNINSTALL_FAIL_PACKAGE FAKE_AFTER_UNINSTALL_ADB_ENABLED FAKE_UNINSTALL_RESULT
+  unset FAKE_AFTER_UNINSTALL_ADB_ENABLED_AFTER_COUNT FAKE_INSTALL_EXISTING_FAIL_PACKAGE
   unset FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT
   unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP
+  unset FAKE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
 }
 
 set_wolf_ready() {
@@ -339,6 +370,31 @@ assert_contains "$OUT" 'REMOVE=com.amazon.android.marketplace RESTORE=cmd packag
 assert_contains "$OUT" 'REMOVE=com.amazon.bueller.music RESTORE=cmd package install-existing --user 0 com.amazon.bueller.music'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'uninstall -k --user 0'
 
+# Break caught: a compact guard that omits any preserve manifest package can remove user apps after core recovery paths are already gone.
+PACKAGE_TCOMM_GUARD_DIR="$TEST_TMP/apply-tcomm-guard"
+prepare_package_state
+awk '
+  $1 == "active" && $2 == "com.amazon.tcomm" { print "uninstalled", $2; next }
+  { print }
+' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
+set_wolf_ready
+if run_tool --output "$PACKAGE_TCOMM_GUARD_DIR" --yes apply; then
+  fail 'apply accepted a missing mandatory preserve package'
+fi
+assert_contains "$ERR" 'guard missing active package: com.amazon.tcomm'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'uninstall -k --user 0'
+
+# Break caught: any alternate HOME resolver can replace the stock recovery route.
+PACKAGE_HOME_GUARD_DIR="$TEST_TMP/apply-home-guard"
+prepare_package_state
+set_wolf_ready
+if FAKE_HOME_RESOLVER='com.example.launcher/.Home' run_tool --output "$PACKAGE_HOME_GUARD_DIR" --yes apply; then
+  fail 'apply accepted a non-stock HOME resolver'
+fi
+assert_contains "$ERR" 'guard HOME resolver expected=com.amazon.tv.launcher/.HomeActivity actual=com.example.launcher/.Home'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'uninstall -k --user 0'
+
 # Break caught: accepting a nonliteral uninstall response or a package that remains active.
 PACKAGE_STILL_ACTIVE_DIR="$TEST_TMP/apply-still-active"
 prepare_package_state
@@ -412,24 +468,57 @@ assert_contains "$JOURNAL" 'attempt com.amazon.bueller.music'
 assert_contains "$JOURNAL" 'success com.amazon.bueller.music'
 verify_checksums "$PACKAGE_JOURNAL_DIR" || fail 'apply did not retain checksummed journal and rollback state'
 
-# Break caught: restore must consume only successful removals, in reverse order, and recheck the target.
-printf '%s\n' com.amazon.android.marketplace com.amazon.bueller.music > "$PACKAGE_JOURNAL_DIR/removed-successfully.txt"
-printf '%s\n' 'attempt com.amazon.example.unrelated' > "$PACKAGE_JOURNAL_DIR/operation-journal.txt"
+# Break caught: interruption after uninstall but before a success ledger entry must remain recoverable from its durable attempt.
+PACKAGE_INTERRUPT_DIR="$TEST_TMP/apply-interrupted"
 prepare_package_state
-run_tool restore "$PACKAGE_JOURNAL_DIR" || fail "public restore failed: $ERR"
+set_wolf_ready
+FAKE_INTERRUPT_MARKER="$TEST_TMP/interrupt-after-uninstall" \
+  run_tool_interrupted --output "$PACKAGE_INTERRUPT_DIR" --yes apply || true
+assert_contains "$(cat "$PACKAGE_INTERRUPT_DIR/operation-journal.txt")" 'attempt com.amazon.android.marketplace'
+assert_not_contains "$(cat "$PACKAGE_INTERRUPT_DIR/removed-successfully.txt")" 'com.amazon.android.marketplace'
+run_tool restore "$PACKAGE_INTERRUPT_DIR" || fail "restore did not reconcile an interrupted uninstall: $ERR"
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+assert_file "$PACKAGE_INTERRUPT_DIR/reconciliation-journal.txt"
+assert_contains "$(cat "$PACKAGE_INTERRUPT_DIR/reconciliation-journal.txt")" 'reconciled com.amazon.android.marketplace'
+verify_checksums "$PACKAGE_INTERRUPT_DIR" || fail 'interruption reconciliation left stale checksums'
+
+# Break caught: restore must parse only trusted journal files rather than execute a supplied script, even if an attacker recomputes checksums.
+PACKAGE_TRUST_DIR="$TEST_TMP/apply-restore-trust"
+prepare_package_state
+set_wolf_ready
+run_tool --output "$PACKAGE_TRUST_DIR" --yes apply || fail "apply failed for restore trust boundary: $ERR"
+SCRIPT_MARKER="$TEST_TMP/untrusted-restore-script-ran"
+printf 'touch %s\n' "$SCRIPT_MARKER" > "$PACKAGE_TRUST_DIR/restore-user0.sh"
+chmod 700 "$PACKAGE_TRUST_DIR/restore-user0.sh"
+refresh_checksums "$PACKAGE_TRUST_DIR"
+run_tool restore "$PACKAGE_TRUST_DIR" || fail "controller restore rejected a checksummed backup: $ERR"
+[ ! -e "$SCRIPT_MARKER" ] || fail 'public restore executed untrusted backup shell'
 RESTORE_LOG=$(cat "$FAKE_ADB_LOG")
 assert_contains "$RESTORE_LOG" 'shell cmd package install-existing --user 0 com.amazon.bueller.music'
 assert_contains "$RESTORE_LOG" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
-assert_not_contains "$RESTORE_LOG" 'com.amazon.example.unrelated'
 awk '
   /install-existing --user 0 com.amazon.bueller.music/ { second = NR }
   /install-existing --user 0 com.amazon.android.marketplace/ { first = NR }
   END { exit !(second && first && second < first) }
 ' "$FAKE_ADB_LOG" || fail 'public restore did not use reverse order'
+
+# Break caught: stale or tampered journals cannot be trusted for package installation.
+PACKAGE_STALE_DIR="$TEST_TMP/apply-restore-stale"
+prepare_package_state
+set_wolf_ready
+run_tool --output "$PACKAGE_STALE_DIR" --yes apply || fail "apply failed for stale-journal test: $ERR"
+printf '%s\n' com.example.untrusted > "$PACKAGE_STALE_DIR/removed-successfully.txt"
+if run_tool restore "$PACKAGE_STALE_DIR"; then
+  fail 'restore accepted a journal whose SHA256SUMS did not match'
+fi
+assert_contains "$ERR" 'backup integrity verification failed'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'install-existing'
+
+# Break caught: a wrong-device restore is refused before reconciliation or package installation.
 if FAKE_RELEASE=7.1.3 run_tool restore "$PACKAGE_JOURNAL_DIR"; then
   fail 'public restore accepted the wrong device'
 fi
-assert_contains "$ERR" 'restore target mismatch: ro.build.version.release expected=7.1.2 actual=7.1.3'
+assert_contains "$ERR" 'release expected=7.1.2 actual=7.1.3'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'install-existing'
 unset FAKE_RELEASE
 
@@ -442,6 +531,19 @@ FAKE_AFTER_UNINSTALL_ADB_ENABLED=0 run_tool --output "$PACKAGE_ADB_GUARD_DIR" --
 assert_contains "$ERR" 'guard changed adb_enabled'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'get-state'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+
+# Break caught: a partial rollback must remove each confirmed restore from the ledger and refresh the checksum before trying the next one.
+PACKAGE_PARTIAL_ROLLBACK_DIR="$TEST_TMP/apply-partial-rollback"
+prepare_package_state
+set_wolf_ready
+FAKE_AFTER_UNINSTALL_ADB_ENABLED=0 \
+FAKE_AFTER_UNINSTALL_ADB_ENABLED_AFTER_COUNT=2 \
+FAKE_INSTALL_EXISTING_FAIL_PACKAGE=com.amazon.android.marketplace \
+  run_tool --output "$PACKAGE_PARTIAL_ROLLBACK_DIR" --yes apply && fail 'apply accepted a partial rollback'
+PARTIAL_LEDGER=$(cat "$PACKAGE_PARTIAL_ROLLBACK_DIR/removed-successfully.txt")
+assert_contains "$PARTIAL_LEDGER" 'com.amazon.android.marketplace'
+assert_not_contains "$PARTIAL_LEDGER" 'com.amazon.bueller.music'
+verify_checksums "$PACKAGE_PARTIAL_ROLLBACK_DIR" || fail 'partial rollback left stale checksums'
 
 clear_wolf_ready
 unset FAKE_PACKAGE_STATE FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT

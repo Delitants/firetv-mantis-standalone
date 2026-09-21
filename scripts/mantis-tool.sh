@@ -357,14 +357,16 @@ checksum_files() {
   audit_dir=$1
   (
     cd "$audit_dir"
-    find . -type f ! -name SHA256SUMS -print | sed 's#^./##' | LC_ALL=C sort |
+    checksum_tmp=SHA256SUMS.tmp.$$
+    find . -type f ! -name 'SHA256SUMS*' -print | sed 's#^./##' | LC_ALL=C sort |
     while IFS= read -r audit_file; do
       if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$audit_file"
       else
         shasum -a 256 "$audit_file"
       fi
-    done > SHA256SUMS
+    done > "$checksum_tmp"
+    mv -f "$checksum_tmp" SHA256SUMS
     if command -v sha256sum >/dev/null 2>&1; then
       sha256sum -c SHA256SUMS >/dev/null
     else
@@ -490,6 +492,19 @@ require_active_packages() {
   done
 }
 
+require_preserved_active_packages() {
+  active_packages=$1
+  script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+  for preserve_manifest in "$script_dir/../manifests/preserve-core.txt" "$script_dir/../manifests/preserve-user-apps.txt"; do
+    while IFS= read -r required_package; do
+      package_list_contains "$active_packages" "$required_package" || {
+        printf 'guard missing active package: %s\n' "$required_package" >&2
+        return 1
+      }
+    done < "$preserve_manifest"
+  done
+}
+
 require_usb_adb() {
   usb_value=$1
   case ",$usb_value," in
@@ -563,7 +578,18 @@ require_settings_routes() {
 
 require_home_resolver() {
   read_shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME || return 1
-  [ -n "$ACTUAL" ] || { printf '%s\n' 'guard has no HOME resolver' >&2; return 1; }
+  [ "$ACTUAL" = com.amazon.tv.launcher/.HomeActivity ] || {
+    printf 'guard HOME resolver expected=com.amazon.tv.launcher/.HomeActivity actual=%s\n' "$ACTUAL" >&2
+    return 1
+  }
+}
+
+require_tcp_8009() {
+  read_shell netstat -ltn || return 1
+  printf '%s\n' "$ACTUAL" | awk '/[:.]8009[[:space:]].*LISTEN/ { found = 1 } END { exit found ? 0 : 1 }' || {
+    printf '%s\n' 'guard TCP 8009 is not listening' >&2
+    return 1
+  }
 }
 
 capture_tun0_state() {
@@ -577,13 +603,7 @@ capture_tun0_state() {
 
 capture_guard_baseline() {
   active_package_list || return 1
-  require_active_packages "$ACTIVE_PACKAGES" \
-    ar.tvplayer.tv com.wireguard.android tv.sweet.tvplayer \
-    com.amazon.whisperjoin.middleware.np com.amazon.whisperjoin.wss.wifiprovisioner \
-    com.amazon.whisperlink.core.android com.amazon.whisperplay.contracts \
-    com.amazon.whisperplay.service.install com.amazon.device.settings \
-    com.amazon.device.settings.sdk.internal.library com.amazon.tv.settings.core \
-    com.amazon.tv.settings.v2 com.android.settings || return 1
+  require_preserved_active_packages "$ACTIVE_PACKAGES" || return 1
   require_wolf_ready || return 1
   read_guard_value bluetooth_on settings get global bluetooth_on || return 1
   GUARD_BLUETOOTH_ON=$GUARD_VALUE
@@ -619,6 +639,7 @@ capture_guard_baseline() {
   GUARD_ALWAYS_ON_VPN_LOCKDOWN=$GUARD_VALUE
   capture_tun0_state
   require_home_resolver || return 1
+  require_tcp_8009 || return 1
   require_settings_routes || return 1
   case "$SERIAL" in
     *:5555) ;;
@@ -641,13 +662,7 @@ guard_unchanged_value() {
 
 compact_guard() {
   active_package_list || return 1
-  require_active_packages "$ACTIVE_PACKAGES" \
-    ar.tvplayer.tv com.wireguard.android tv.sweet.tvplayer \
-    com.amazon.whisperjoin.middleware.np com.amazon.whisperjoin.wss.wifiprovisioner \
-    com.amazon.whisperlink.core.android com.amazon.whisperplay.contracts \
-    com.amazon.whisperplay.service.install com.amazon.device.settings \
-    com.amazon.device.settings.sdk.internal.library com.amazon.tv.settings.core \
-    com.amazon.tv.settings.v2 com.android.settings || return 1
+  require_preserved_active_packages "$ACTIVE_PACKAGES" || return 1
   require_wolf_version || return 1
   guard_unchanged_value bluetooth_on "$GUARD_BLUETOOTH_ON" settings get global bluetooth_on || return 1
   guard_unchanged_value locale "$GUARD_LOCALE" getprop persist.sys.locale || return 1
@@ -672,6 +687,7 @@ compact_guard() {
     return 1
   }
   require_home_resolver || return 1
+  require_tcp_8009 || return 1
   require_settings_routes || return 1
   read_adb_transport || return 1
   [ "$GUARD_VALUE" = device ] || { printf 'guard TCP 5555 is not reachable: %s\n' "$GUARD_VALUE" >&2; return 1; }
@@ -679,7 +695,7 @@ compact_guard() {
 
 rollback_recorded_packages() {
   removed_file=$1
-  rollback_file="$removed_file.rollback"
+  rollback_file=$(mktemp "${TMPDIR:-/tmp}/mantis-rollback.XXXXXX") || return 1
   awk '{ lines[NR] = $0 } END { for (line = NR; line > 0; line--) print lines[line] }' "$removed_file" > "$rollback_file"
   rollback_ok=yes
   while IFS= read -r rollback_package; do
@@ -687,12 +703,15 @@ rollback_recorded_packages() {
     if ! restore_package "$rollback_package"; then
       printf 'rollback failed for %s\n' "$rollback_package" >&2
       rollback_ok=no
+      break
+    fi
+    if ! remove_recorded_package "$removed_file" "$rollback_package"; then
+      printf 'rollback ledger update failed for %s\n' "$rollback_package" >&2
+      rollback_ok=no
+      break
     fi
   done < "$rollback_file"
   rm -f "$rollback_file"
-  if [ "$rollback_ok" = yes ]; then
-    : > "$removed_file"
-  fi
   [ "$rollback_ok" = yes ]
 }
 
@@ -714,6 +733,108 @@ refresh_backup_checksums() {
     printf 'could not refresh backup checksums: %s\n' "$1" >&2
     return 1
   }
+}
+
+validate_recorded_package() {
+  recorded_candidate=$1
+  case "$recorded_candidate" in
+    ''|*[!A-Za-z0-9._]*) return 1 ;;
+  esac
+  script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+  awk -v package="$recorded_candidate" '$0 == package { found = 1 } END { exit found ? 0 : 1 }' "$script_dir/../manifests/remove-user0.txt"
+}
+
+recorded_package_exists() {
+  removed_file=$1
+  searched_package=$2
+  awk -v package="$searched_package" '$0 == package { found = 1 } END { exit found ? 0 : 1 }' "$removed_file"
+}
+
+replace_recorded_ledger() {
+  removed_file=$1
+  replacement_file=$2
+  [ -f "$replacement_file" ] || return 1
+  mv -f "$replacement_file" "$removed_file" || return 1
+  refresh_backup_checksums "$(dirname "$removed_file")"
+}
+
+append_recorded_package() {
+  removed_file=$1
+  ledger_package=$2
+  recorded_package_exists "$removed_file" "$ledger_package" && return 0
+  ledger_tmp="$removed_file.tmp.$$"
+  { cat "$removed_file"; printf '%s\n' "$ledger_package"; } > "$ledger_tmp" || return 1
+  replace_recorded_ledger "$removed_file" "$ledger_tmp"
+}
+
+remove_recorded_package() {
+  removed_file=$1
+  ledger_package=$2
+  ledger_tmp="$removed_file.tmp.$$"
+  awk -v package="$ledger_package" '$0 != package { print }' "$removed_file" > "$ledger_tmp" || return 1
+  replace_recorded_ledger "$removed_file" "$ledger_tmp"
+}
+
+verify_backup_integrity() {
+  backup_dir=$1
+  [ -d "$backup_dir" ] && [ ! -L "$backup_dir" ] || return 1
+  for backup_file in device.txt removed-successfully.txt operation-journal.txt SHA256SUMS; do
+    [ -f "$backup_dir/$backup_file" ] && [ ! -L "$backup_dir/$backup_file" ] || return 1
+  done
+  (
+    cd "$backup_dir"
+    if command -v sha256sum >/dev/null 2>&1; then
+      sha256sum -c SHA256SUMS >/dev/null
+    else
+      shasum -a 256 -c SHA256SUMS >/dev/null
+    fi
+  )
+}
+
+validate_restore_journal() {
+  backup_dir=$1
+  removed_file=$backup_dir/removed-successfully.txt
+  operation_file=$backup_dir/operation-journal.txt
+  while IFS= read -r package; do
+    validate_recorded_package "$package" || {
+      printf 'invalid recorded package: %s\n' "$package" >&2
+      return 1
+    }
+  done < "$removed_file"
+  while IFS=' ' read -r journal_state journal_package journal_extra; do
+    [ -n "$journal_state" ] || continue
+    [ -z "${journal_extra:-}" ] || { printf '%s\n' 'invalid operation journal record' >&2; return 1; }
+    case "$journal_state" in
+      attempt|success|failure|skip|rollback|guard-failure) ;;
+      *) printf 'invalid operation journal state: %s\n' "$journal_state" >&2; return 1 ;;
+    esac
+    validate_recorded_package "$journal_package" || {
+      printf 'invalid operation journal package: %s\n' "$journal_package" >&2
+      return 1
+    }
+  done < "$operation_file"
+}
+
+reconcile_attempted_removals() {
+  backup_dir=$1
+  removed_file=$backup_dir/removed-successfully.txt
+  operation_file=$backup_dir/operation-journal.txt
+  reconciliation_file=$backup_dir/reconciliation-journal.txt
+  active_package_list || return 1
+  read_shell pm list packages -u || return 1
+  all_packages=$ACTUAL
+  : > "$reconciliation_file"
+  while IFS=' ' read -r journal_state journal_package journal_extra; do
+    [ "$journal_state" = attempt ] || continue
+    [ -z "${journal_extra:-}" ] || return 1
+    recorded_package_exists "$removed_file" "$journal_package" && continue
+    if ! package_list_contains "$ACTIVE_PACKAGES" "$journal_package" && package_list_contains "$all_packages" "$journal_package"; then
+      append_recorded_package "$removed_file" "$journal_package" || return 1
+      printf 'reconciled %s\n' "$journal_package" >> "$reconciliation_file"
+      refresh_backup_checksums "$backup_dir" || return 1
+    fi
+  done < "$operation_file"
+  refresh_backup_checksums "$backup_dir"
 }
 
 plan() {
@@ -781,8 +902,7 @@ apply() {
       printf 'removal verification failed for %s\n' "$package" >&2
       exit 1
     fi
-    printf '%s\n' "$package" >> "$removed_file"
-    refresh_backup_checksums "$backup_dir" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }
+    append_recorded_package "$removed_file" "$package" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }
     printf 'success %s\n' "$package" >> "$journal_file"
     refresh_backup_checksums "$backup_dir" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }
     if ! compact_guard; then
@@ -799,10 +919,15 @@ apply() {
 
 restore_backup() {
   backup_dir=$COMMAND_ARG
-  [ -d "$backup_dir" ] || { printf 'restore backup directory does not exist: %s\n' "$backup_dir" >&2; exit 1; }
-  restore_script=$backup_dir/restore-user0.sh
-  [ -f "$restore_script" ] || { printf 'restore script is missing: %s\n' "$restore_script" >&2; exit 1; }
-  ADB=$ADB SERIAL=$SERIAL sh "$restore_script"
+  verify_backup_integrity "$backup_dir" || { printf '%s\n' 'backup integrity verification failed' >&2; exit 1; }
+  require_target
+  validate_manifests
+  require_restore_capability
+  validate_restore_journal "$backup_dir" || exit 1
+  reconcile_attempted_removals "$backup_dir" || { printf '%s\n' 'backup reconciliation failed' >&2; exit 1; }
+  removed_file=$backup_dir/removed-successfully.txt
+  rollback_recorded_packages "$removed_file" || { printf '%s\n' 'restore failed before all packages were restored' >&2; exit 1; }
+  printf '%s\n' 'RESTORE=PASS'
 }
 
 WOLF_URL=https://archive.org/download/wolf-launcher-0.1.9-wolf_202110/WolfLauncher_0.1.9-Wolf.apk
