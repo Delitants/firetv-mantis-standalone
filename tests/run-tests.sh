@@ -5,6 +5,8 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mantis-tool-tests.XXXXXX")
 MANIFEST_REMOVE="$ROOT/manifests/remove-user0.txt"
 ORIGINAL_REMOVE=
+ORIGINAL_REMOVE="$TEST_TMP/remove-user0-original.txt"
+cp "$MANIFEST_REMOVE" "$ORIGINAL_REMOVE"
 
 restore_manifest() {
   if [ -n "$ORIGINAL_REMOVE" ]; then
@@ -24,6 +26,10 @@ REAL_PYTHON_BIN=$(command -v python3)
 unset FAKE_MANUFACTURER FAKE_MODEL FAKE_DEVICE FAKE_BUILD_ID FAKE_INCREMENTAL
 unset FAKE_RELEASE FAKE_SDK FAKE_ABI FAKE_UNAME FAKE_ENFORCE FAKE_UID
 unset FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES FAKE_HOME FAKE_BLUETOOTH_ON FAKE_TUN0
+unset FAKE_ADB_ENABLED FAKE_DEVELOPMENT_SETTINGS_ENABLED FAKE_PERSIST_USB_CONFIG FAKE_SYS_USB_CONFIG
+unset FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT FAKE_ADBD_PID FAKE_ALWAYS_ON_VPN_APP
+unset FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_PACKAGE_STATE FAKE_UNINSTALL_MODE FAKE_UNINSTALL_FAIL_PACKAGE
+unset FAKE_AFTER_UNINSTALL_ADB_ENABLED FAKE_UNINSTALL_RESULT
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
 unset FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK FAKE_WOLF_INSTALL_LOCATION
@@ -46,6 +52,13 @@ assert_file() {
   [ -f "$1" ] || fail "expected file: $1"
 }
 
+assert_not_contains() {
+  case "$1" in
+    *"$2"*) fail "did not expect [$2] in [$1]" ;;
+    *) ;;
+  esac
+}
+
 verify_checksums() {
   checksum_dir=$1
   if command -v sha256sum >/dev/null 2>&1; then
@@ -57,7 +70,7 @@ verify_checksums() {
 
 run_tool() {
   : > "$FAKE_ADB_LOG"
-  if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-serial "$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
+  if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 "$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
     STATUS=0
   else
     STATUS=$?
@@ -76,7 +89,7 @@ run_wolf() {
   if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" \
     --curl "$ROOT/tests/fixtures/curl" --aapt "$ROOT/tests/fixtures/aapt" \
     --apksigner "$ROOT/tests/fixtures/apksigner" --sha256 "$ROOT/tests/fixtures/wolf-sha256" \
-    --serial test-serial --yes install-wolf >"$TEST_TMP/out" 2>"$TEST_TMP/err"
+    --serial test-host:5555 --yes install-wolf >"$TEST_TMP/out" 2>"$TEST_TMP/err"
   then
     STATUS=0
   else
@@ -92,6 +105,40 @@ reset_wolf_fixture() {
   unset FAKE_WOLF_VERSION_CODE FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK
   unset FAKE_WOLF_INSTALL_LOCATION FAKE_WOLF_ACTIVITY FAKE_WOLF_V1 FAKE_WOLF_V2 FAKE_WOLF_SIGNER
   unset FAKE_WOLF_STATE FAKE_WOLF_CURL_LOG FAKE_WOLF_DUMPSYS_INDENT
+}
+
+prepare_package_state() {
+  FAKE_PACKAGE_STATE=$TEST_TMP/package-state
+  export FAKE_PACKAGE_STATE
+  printf '%s\n' \
+    'active ar.tvplayer.tv' \
+    'active com.wireguard.android' \
+    'active tv.sweet.tvplayer' \
+    'active com.wolf.firelauncher' \
+    'active com.amazon.device.settings' \
+    'active com.amazon.device.settings.sdk.internal.library' \
+    'active com.amazon.tv.settings.core' \
+    'active com.amazon.tv.settings.v2' \
+    'active com.android.settings' \
+    'active com.amazon.whisperjoin.middleware.np' \
+    'active com.amazon.whisperjoin.wss.wifiprovisioner' \
+    'active com.amazon.whisperlink.core.android' \
+    'active com.amazon.whisperplay.contracts' \
+    'active com.amazon.whisperplay.service.install' \
+    'active com.amazon.android.marketplace' \
+    'active com.amazon.bueller.music' > "$FAKE_PACKAGE_STATE"
+  unset FAKE_UNINSTALL_MODE FAKE_UNINSTALL_FAIL_PACKAGE FAKE_AFTER_UNINSTALL_ADB_ENABLED FAKE_UNINSTALL_RESULT
+  unset FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT
+  unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP
+}
+
+set_wolf_ready() {
+  export FAKE_WOLF_INSTALLED_VERSION_CODE=11900120
+  export FAKE_WOLF_INSTALLED_VERSION_NAME=0.1.9-Wolf
+}
+
+clear_wolf_ready() {
+  unset FAKE_WOLF_INSTALLED_VERSION_CODE FAKE_WOLF_INSTALLED_VERSION_NAME
 }
 
 assert_wolf_not_installed() {
@@ -139,7 +186,7 @@ run_tool --output "$TEST_TMP/audit-initial" audit || true
 [ "$STATUS" -eq 0 ] || fail "audit failed for exact target: $ERR"
 assert_contains "$OUT" 'SUPPORTED_MUTATION_TARGET=YES'
 assert_contains "$OUT" 'ROOT=NOT_ACHIEVED'
-assert_contains "$(cat "$FAKE_ADB_LOG")" '-s test-serial shell getprop ro.product.model'
+assert_contains "$(cat "$FAKE_ADB_LOG")" '-s test-host:5555 shell getprop ro.product.model'
 
 # Break caught: removing audit publication would leave no restorable baseline.
 AUDIT_DIR="$TEST_TMP/audit"
@@ -280,6 +327,125 @@ assert_contains "$(cat "$TEST_TMP/restore-err")" 'ro.build.version.release expec
 case "$(cat "$FAKE_ADB_LOG")" in
   *install-existing*) fail 'restore attempted installation on a mismatched target' ;;
 esac
+
+# Break caught: planning a removal must expose the exact inverse without changing user 0.
+PACKAGE_ORIGINAL_REMOVE="$TEST_TMP/remove-user0-package-operations.txt"
+cp "$MANIFEST_REMOVE" "$PACKAGE_ORIGINAL_REMOVE"
+printf '%s\n' com.amazon.android.marketplace com.amazon.bueller.music > "$MANIFEST_REMOVE"
+prepare_package_state
+set_wolf_ready
+run_tool plan || fail "plan failed for valid package operations: $ERR"
+assert_contains "$OUT" 'REMOVE=com.amazon.android.marketplace RESTORE=cmd package install-existing --user 0 com.amazon.android.marketplace'
+assert_contains "$OUT" 'REMOVE=com.amazon.bueller.music RESTORE=cmd package install-existing --user 0 com.amazon.bueller.music'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'uninstall -k --user 0'
+
+# Break caught: accepting a nonliteral uninstall response or a package that remains active.
+PACKAGE_STILL_ACTIVE_DIR="$TEST_TMP/apply-still-active"
+prepare_package_state
+set_wolf_ready
+FAKE_UNINSTALL_MODE=still-active run_tool --output "$PACKAGE_STILL_ACTIVE_DIR" --yes apply &&
+  fail 'apply accepted Success while the package remained active'
+assert_contains "$ERR" 'removal verification failed for com.amazon.android.marketplace'
+assert_contains "$(cat "$PACKAGE_STILL_ACTIVE_DIR/operation-journal.txt")" 'attempt com.amazon.android.marketplace'
+assert_contains "$(cat "$PACKAGE_STILL_ACTIVE_DIR/operation-journal.txt")" 'failure com.amazon.android.marketplace'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+
+# Break caught: accepting a nonliteral Success response makes failed removals look safe.
+PACKAGE_NONLITERAL_DIR="$TEST_TMP/apply-nonliteral"
+prepare_package_state
+set_wolf_ready
+FAKE_UNINSTALL_RESULT='Success with trailing text' run_tool --output "$PACKAGE_NONLITERAL_DIR" --yes apply &&
+  fail 'apply accepted a nonliteral uninstall response'
+assert_contains "$ERR" 'removal failed for com.amazon.android.marketplace'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+
+# Break caught: a later uninstall error must restore the current batch in reverse order.
+PACKAGE_ERROR_DIR="$TEST_TMP/apply-error"
+prepare_package_state
+set_wolf_ready
+FAKE_UNINSTALL_FAIL_PACKAGE=com.amazon.bueller.music run_tool --output "$PACKAGE_ERROR_DIR" --yes apply &&
+  fail 'apply accepted a failed uninstall'
+assert_contains "$ERR" 'removal failed for com.amazon.bueller.music'
+ERROR_LOG=$(cat "$FAKE_ADB_LOG")
+assert_contains "$ERROR_LOG" 'shell cmd package install-existing --user 0 com.amazon.bueller.music'
+assert_contains "$ERROR_LOG" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+awk '
+  /install-existing --user 0 com.amazon.bueller.music/ { current = NR }
+  /install-existing --user 0 com.amazon.android.marketplace/ { previous = NR }
+  END { exit !(current && previous && current < previous) }
+' "$FAKE_ADB_LOG" || fail 'rollback was not in reverse package order'
+
+# Break caught: an already absent user-0 package must be skipped and omitted from rollback.
+PACKAGE_ABSENT_DIR="$TEST_TMP/apply-absent"
+prepare_package_state
+awk '
+  $1 == "active" && $2 == "com.amazon.android.marketplace" { print "uninstalled", $2; next }
+  { print }
+' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
+set_wolf_ready
+run_tool --output "$PACKAGE_ABSENT_DIR" --yes apply || fail "apply failed for an absent package: $ERR"
+assert_contains "$(cat "$PACKAGE_ABSENT_DIR/operation-journal.txt")" 'skip com.amazon.android.marketplace'
+assert_not_contains "$(cat "$PACKAGE_ABSENT_DIR/removed-successfully.txt")" 'com.amazon.android.marketplace'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'uninstall -k --user 0 com.amazon.android.marketplace'
+
+# Break caught: a package that vanishes from the all-users inventory has no safe rollback proof.
+PACKAGE_MISSING_U_DIR="$TEST_TMP/apply-missing-u"
+prepare_package_state
+set_wolf_ready
+FAKE_UNINSTALL_MODE=missing-uninstalled run_tool --output "$PACKAGE_MISSING_U_DIR" --yes apply &&
+  fail 'apply accepted a package missing from pm list packages -u'
+assert_contains "$ERR" 'removal verification failed for com.amazon.android.marketplace'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+
+# Break caught: interruption recovery needs the attempt durable before adb, and each result before the next removal.
+PACKAGE_JOURNAL_DIR="$TEST_TMP/apply-journal"
+prepare_package_state
+set_wolf_ready
+FAKE_REQUIRED_JOURNAL="$PACKAGE_JOURNAL_DIR/operation-journal.txt" \
+FAKE_REQUIRED_JOURNAL_RESULT='success com.amazon.android.marketplace' \
+  run_tool --output "$PACKAGE_JOURNAL_DIR" --yes apply || fail "apply did not maintain a durable journal: $ERR"
+JOURNAL=$(cat "$PACKAGE_JOURNAL_DIR/operation-journal.txt")
+assert_contains "$JOURNAL" 'attempt com.amazon.android.marketplace'
+assert_contains "$JOURNAL" 'success com.amazon.android.marketplace'
+assert_contains "$JOURNAL" 'attempt com.amazon.bueller.music'
+assert_contains "$JOURNAL" 'success com.amazon.bueller.music'
+verify_checksums "$PACKAGE_JOURNAL_DIR" || fail 'apply did not retain checksummed journal and rollback state'
+
+# Break caught: restore must consume only successful removals, in reverse order, and recheck the target.
+printf '%s\n' com.amazon.android.marketplace com.amazon.bueller.music > "$PACKAGE_JOURNAL_DIR/removed-successfully.txt"
+printf '%s\n' 'attempt com.amazon.example.unrelated' > "$PACKAGE_JOURNAL_DIR/operation-journal.txt"
+prepare_package_state
+run_tool restore "$PACKAGE_JOURNAL_DIR" || fail "public restore failed: $ERR"
+RESTORE_LOG=$(cat "$FAKE_ADB_LOG")
+assert_contains "$RESTORE_LOG" 'shell cmd package install-existing --user 0 com.amazon.bueller.music'
+assert_contains "$RESTORE_LOG" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+assert_not_contains "$RESTORE_LOG" 'com.amazon.example.unrelated'
+awk '
+  /install-existing --user 0 com.amazon.bueller.music/ { second = NR }
+  /install-existing --user 0 com.amazon.android.marketplace/ { first = NR }
+  END { exit !(second && first && second < first) }
+' "$FAKE_ADB_LOG" || fail 'public restore did not use reverse order'
+if FAKE_RELEASE=7.1.3 run_tool restore "$PACKAGE_JOURNAL_DIR"; then
+  fail 'public restore accepted the wrong device'
+fi
+assert_contains "$ERR" 'restore target mismatch: ro.build.version.release expected=7.1.2 actual=7.1.3'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'install-existing'
+unset FAKE_RELEASE
+
+# Break caught: losing ADB Debugging after an uninstall must trigger rollback while the transport remains live.
+PACKAGE_ADB_GUARD_DIR="$TEST_TMP/apply-adb-guard"
+prepare_package_state
+set_wolf_ready
+FAKE_AFTER_UNINSTALL_ADB_ENABLED=0 run_tool --output "$PACKAGE_ADB_GUARD_DIR" --yes apply &&
+  fail 'apply accepted a changed adb_enabled setting'
+assert_contains "$ERR" 'guard changed adb_enabled'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'get-state'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell cmd package install-existing --user 0 com.amazon.android.marketplace'
+
+clear_wolf_ready
+unset FAKE_PACKAGE_STATE FAKE_REQUIRED_JOURNAL FAKE_REQUIRED_JOURNAL_RESULT
+cp "$PACKAGE_ORIGINAL_REMOVE" "$MANIFEST_REMOVE"
 
 # Break caught: treating prose or similarly named commands as a rollback form.
 MISLEADING_AUDIT_DIR="$TEST_TMP/audit-misleading-help"

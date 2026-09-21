@@ -10,6 +10,12 @@ if [ "$1" != "-s" ] || [ -z "${2:-}" ]; then
 fi
 shift 2
 
+if [ "$1" = get-state ]; then
+  [ "$#" -eq 1 ] || { printf '%s\n' 'invalid fake adb get-state command' >&2; exit 64; }
+  printf '%s\n' "${FAKE_ADB_STATE:-device}"
+  exit 0
+fi
+
 if [ "$1" = install ]; then
   [ "${2:-}" = -r ] && [ -n "${3:-}" ] && [ -z "${4:-}" ] || {
     printf 'invalid fake adb install command: %s\n' "$*" >&2
@@ -28,6 +34,41 @@ fi
 }
 shift
 
+replace_package_state() {
+  package=$1
+  replacement=$2
+  [ -n "${FAKE_PACKAGE_STATE:-}" ] || return 0
+  awk -v package="$package" -v replacement="$replacement" '
+    $2 == package { if (replacement != "missing") print replacement, package; seen = 1; next }
+    { print }
+    END { if (!seen && replacement != "missing") print replacement, package }
+  ' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+  mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
+}
+
+package_list() {
+  list_kind=$1
+  if [ -z "${FAKE_PACKAGE_STATE:-}" ]; then
+    case "$list_kind" in
+      active) printf '%s\n' 'package:com.amazon.tv.settings' 'package:com.example.active' ;;
+      all) printf '%s\n' 'package:com.amazon.tv.settings' 'package:com.example.active' 'package:com.example.removed' ;;
+      disabled) printf '%s\n' 'package:com.example.disabled' ;;
+    esac
+    return
+  fi
+  case "$list_kind" in
+    active)
+      awk '$1 == "active" { print "package:" $2 }' "$FAKE_PACKAGE_STATE"
+      ;;
+    all)
+      awk '$1 == "active" || $1 == "uninstalled" { print "package:" $2 }' "$FAKE_PACKAGE_STATE"
+      ;;
+    disabled)
+      awk '$1 == "disabled" { print "package:" $2 }' "$FAKE_PACKAGE_STATE"
+      ;;
+  esac
+}
+
 case "$1" in
   getprop)
     case "${2:-}" in
@@ -41,6 +82,10 @@ case "$1" in
       ro.product.cpu.abi) value=${FAKE_ABI:-armeabi-v7a} ;;
       persist.sys.locale) value=${FAKE_PERSIST_SYS_LOCALE:-en-US} ;;
       system_locales) value=${FAKE_SYSTEM_LOCALES:-en-US} ;;
+      persist.sys.usb.config) value=${FAKE_PERSIST_USB_CONFIG:-mtp,adb} ;;
+      sys.usb.config) value=${FAKE_SYS_USB_CONFIG:-mtp,adb} ;;
+      service.adb.tcp.port) value=${FAKE_SERVICE_ADB_TCP_PORT:-5555} ;;
+      persist.adb.tcp.port) value=${FAKE_PERSIST_ADB_TCP_PORT:-5555} ;;
       *) value= ;;
     esac
     ;;
@@ -49,11 +94,23 @@ case "$1" in
     value=${FAKE_HOME:-/data/local/tmp}
     ;;
   settings)
-    [ "${2:-}" = "get" ] && [ "${3:-}" = "global" ] && [ "${4:-}" = "bluetooth_on" ] || {
-      printf '%s\n' 'fake adb only exposes global bluetooth_on' >&2
-      exit 64
-    }
-    value=${FAKE_BLUETOOTH_ON:-1}
+    [ "${2:-}" = "get" ] || { printf '%s\n' 'fake adb only exposes settings get' >&2; exit 64; }
+    case "${3:-}:${4:-}" in
+      global:bluetooth_on) value=${FAKE_BLUETOOTH_ON:-1} ;;
+      global:adb_enabled)
+        if [ -n "${FAKE_AFTER_UNINSTALL_ADB_ENABLED:-}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
+          awk '$1 == "uninstalled" || $1 == "missing" { found = 1 } END { exit !found }' "$FAKE_PACKAGE_STATE"
+        then
+          value=$FAKE_AFTER_UNINSTALL_ADB_ENABLED
+        else
+          value=${FAKE_ADB_ENABLED:-1}
+        fi
+        ;;
+      global:development_settings_enabled) value=${FAKE_DEVELOPMENT_SETTINGS_ENABLED:-1} ;;
+      secure:always_on_vpn_app) value=${FAKE_ALWAYS_ON_VPN_APP:-com.wireguard.android} ;;
+      secure:always_on_vpn_lockdown) value=${FAKE_ALWAYS_ON_VPN_LOCKDOWN:-1} ;;
+      *) printf 'unsupported fake settings query: %s\n' "$*" >&2; exit 64 ;;
+    esac
     ;;
   ip)
     [ "${2:-}" = "link" ] && [ "${3:-}" = "show" ] && [ "${4:-}" = "tun0" ] || {
@@ -98,6 +155,7 @@ case "$1" in
               printf 'invalid fake cmd install-existing command: %s\n' "$*" >&2
               exit 64
             }
+            replace_package_state "${6}" active
             value="installed ${6}"
             ;;
           *) printf 'unsupported fake cmd package command: %s\n' "$*" >&2; exit 64 ;;
@@ -114,12 +172,9 @@ case "$1" in
       list)
         [ "${3:-}" = "packages" ] || { printf 'unsupported fake pm list: %s\n' "$*" >&2; exit 64; }
         case "${4:-}" in
-          '') value=${FAKE_PACKAGES_ACTIVE:-'package:com.amazon.tv.settings
-package:com.example.active'} ;;
-          -u) value=${FAKE_PACKAGES_UNINSTALLED:-'package:com.amazon.tv.settings
-package:com.example.active
-package:com.example.removed'} ;;
-          -d) value=${FAKE_PACKAGES_DISABLED:-'package:com.example.disabled'} ;;
+          '') value=$(package_list active) ;;
+          -u) value=$(package_list all) ;;
+          -d) value=$(package_list disabled) ;;
           *) printf 'unsupported fake pm list packages flag: %s\n' "${4:-}" >&2; exit 64 ;;
         esac
         ;;
@@ -128,7 +183,37 @@ package:com.example.removed'} ;;
           printf 'invalid fake pm install-existing command: %s\n' "$*" >&2
           exit 64
         }
+        replace_package_state "${5}" active
         value="installed ${5}"
+        ;;
+      uninstall)
+        [ "${3:-}" = "-k" ] && [ "${4:-}" = "--user" ] && [ "${5:-}" = "0" ] && [ -n "${6:-}" ] || {
+          printf 'invalid fake pm uninstall command: %s\n' "$*" >&2
+          exit 64
+        }
+        package=${6}
+        if [ "${FAKE_UNINSTALL_MODE:-}" = error ] || [ "${FAKE_UNINSTALL_FAIL_PACKAGE:-}" = "$package" ]; then
+          printf '%s\n' 'Failure [not installed for 0]'
+          exit 1
+        fi
+        if [ -n "${FAKE_REQUIRED_JOURNAL:-}" ]; then
+          grep -Fx "attempt $package" "$FAKE_REQUIRED_JOURNAL" >/dev/null || {
+            printf '%s\n' 'uninstall was called before its attempt was journaled' >&2
+            exit 1
+          }
+          if [ "$package" != com.amazon.android.marketplace ] && [ -n "${FAKE_REQUIRED_JOURNAL_RESULT:-}" ]; then
+            grep -Fx "$FAKE_REQUIRED_JOURNAL_RESULT" "$FAKE_REQUIRED_JOURNAL" >/dev/null || {
+              printf '%s\n' 'next uninstall was called before the previous result was journaled' >&2
+              exit 1
+            }
+          fi
+        fi
+        case "${FAKE_UNINSTALL_MODE:-}" in
+          still-active) ;;
+          missing-uninstalled) replace_package_state "$package" missing ;;
+          *) replace_package_state "$package" uninstalled ;;
+        esac
+        value=${FAKE_UNINSTALL_RESULT:-Success}
         ;;
       *) printf 'unsupported fake pm command: %s\n' "$*" >&2; exit 64 ;;
     esac
@@ -141,6 +226,10 @@ package:com.example.removed'} ;;
     ;;
   id)
     value=${FAKE_UID:-2000}
+    ;;
+  pidof)
+    [ "${2:-}" = adbd ] || { printf 'unsupported fake pidof command: %s\n' "$*" >&2; exit 64; }
+    value=${FAKE_ADBD_PID:-123}
     ;;
   dumpsys)
     [ "${2:-}" = package ] && [ "${3:-}" = com.wolf.firelauncher ] || {

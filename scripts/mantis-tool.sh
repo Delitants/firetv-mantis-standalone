@@ -9,11 +9,12 @@ SHA256_TOOL=
 SERIAL=
 YES=no
 COMMAND=
+COMMAND_ARG=
 OUTPUT=
 CR=$(printf '\r')
 
 usage() {
-  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--output DIR] [--yes] audit|apply|install-wolf' >&2
+  printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--output DIR] [--yes] audit|plan|apply|install-wolf|restore BACKUP_DIRECTORY' >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -73,7 +74,13 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$COMMAND" ] && [ "$#" -eq 0 ] || { usage; exit 64; }
+[ -n "$COMMAND" ] || { usage; exit 64; }
+if [ "$COMMAND" = restore ]; then
+  [ "$#" -eq 1 ] || { usage; exit 64; }
+  COMMAND_ARG=$1
+else
+  [ "$#" -eq 0 ] || { usage; exit 64; }
+fi
 [ -n "$SERIAL" ] || { printf '%s\n' '--serial is required for device commands' >&2; exit 64; }
 
 adb_cmd() {
@@ -408,6 +415,7 @@ publish_audit() {
     ! write_shell_capture "$work_dir/home-resolver.txt" cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME ||
     ! write_restore_script "$work_dir/restore-user0.sh" "$RESTORE_CAPABILITY" ||
     ! : > "$work_dir/removed-successfully.txt" ||
+    ! : > "$work_dir/operation-journal.txt" ||
     ! checksum_files "$work_dir"
   then
     retain_staging "$work_dir"
@@ -418,6 +426,7 @@ publish_audit() {
     printf 'audit output publication conflict: %s\n' "$final_dir" >&2
     return 1
   fi
+  PUBLISHED_AUDIT_DIR=$final_dir
   printf 'AUDIT_OUTPUT=%s\n' "$final_dir"
 }
 
@@ -441,6 +450,359 @@ require_restore_capability() {
     printf '%s\n' 'no help-proven install-existing command is available' >&2
     exit 1
   }
+}
+
+restore_command() {
+  case "$RESTORE_CAPABILITY" in
+    cmd) printf '%s\n' 'cmd package install-existing' ;;
+    pm) printf '%s\n' 'pm install-existing' ;;
+    *) return 1 ;;
+  esac
+}
+
+restore_package() {
+  case "$RESTORE_CAPABILITY" in
+    cmd) adb_shell cmd package install-existing --user 0 "$1" ;;
+    pm) adb_shell pm install-existing --user 0 "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+package_list_contains() {
+  package_list=$1
+  package=$2
+  printf '%s\n' "$package_list" | awk -v package="$package" '$0 == "package:" package { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+active_package_list() {
+  read_shell pm list packages || return 1
+  ACTIVE_PACKAGES=$ACTUAL
+}
+
+require_active_packages() {
+  active_packages=$1
+  shift
+  for required_package in "$@"; do
+    package_list_contains "$active_packages" "$required_package" || {
+      printf 'guard missing active package: %s\n' "$required_package" >&2
+      return 1
+    }
+  done
+}
+
+require_usb_adb() {
+  usb_value=$1
+  case ",$usb_value," in
+    *,adb,*|*",adb,"*) ;;
+    *) printf 'guard requires USB configuration containing adb: %s\n' "$usb_value" >&2; return 1 ;;
+  esac
+}
+
+read_guard_value() {
+  guard_label=$1
+  shift
+  read_shell "$@" || {
+    printf 'guard could not read %s\n' "$guard_label" >&2
+    return 1
+  }
+  GUARD_VALUE=$ACTUAL
+}
+
+read_adb_transport() {
+  if ! GUARD_VALUE=$(adb_cmd get-state); then
+    printf '%s\n' 'guard could not reach TCP adb transport' >&2
+    return 1
+  fi
+  strip_one_trailing_cr "$GUARD_VALUE"
+  GUARD_VALUE=$NORMALIZED
+}
+
+require_wolf_version() {
+  read_shell dumpsys package "$WOLF_PACKAGE" || {
+    printf '%s\n' 'guard could not inspect Wolf Launcher' >&2
+    return 1
+  }
+  wolf_print_installed_identity "$ACTUAL"
+  [ "$WOLF_INSTALLED_VERSION_CODE" = "$WOLF_VERSION_CODE" ] || {
+    printf 'guard Wolf version code expected=%s actual=%s\n' "$WOLF_VERSION_CODE" "$WOLF_INSTALLED_VERSION_CODE" >&2
+    return 1
+  }
+  [ "$WOLF_INSTALLED_VERSION_NAME" = "$WOLF_VERSION_NAME" ] || {
+    printf 'guard Wolf version name expected=%s actual=%s\n' "$WOLF_VERSION_NAME" "$WOLF_INSTALLED_VERSION_NAME" >&2
+    return 1
+  }
+}
+
+require_wolf_ready() {
+  require_wolf_version || return 1
+  wolf_launch=$(adb_shell am start -n "$WOLF_COMPONENT") || {
+    printf '%s\n' 'Wolf Launcher direct launch failed' >&2
+    return 1
+  }
+  case "$wolf_launch" in
+    *'Starting: Intent'*) ;;
+    *) printf '%s\n' 'Wolf Launcher direct launch did not report a launch intent' >&2; return 1 ;;
+  esac
+}
+
+require_settings_routes() {
+  for settings_action in \
+    android.settings.SETTINGS android.settings.WIFI_SETTINGS \
+    android.settings.MANAGE_APPLICATIONS_SETTINGS android.settings.CONTROLLERS_SETTINGS \
+    android.settings.DEVICE_INFO_SETTINGS android.settings.ACCESSIBILITY_SETTINGS \
+    android.settings.DISPLAY_SETTINGS com.amazon.device.settings.action.DATE_TIME \
+    com.amazon.device.settings.action.LANGUAGE
+  do
+    read_shell cmd package resolve-activity --brief -a "$settings_action" || return 1
+    [ -n "$ACTUAL" ] || {
+      printf 'guard has no Settings route resolver: %s\n' "$settings_action" >&2
+      return 1
+    }
+  done
+}
+
+require_home_resolver() {
+  read_shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME || return 1
+  [ -n "$ACTUAL" ] || { printf '%s\n' 'guard has no HOME resolver' >&2; return 1; }
+}
+
+capture_tun0_state() {
+  if tun0_output=$(adb_shell ip link show tun0); then
+    strip_one_trailing_cr "$tun0_output"
+    [ -n "$NORMALIZED" ] && GUARD_TUN0_STATE="present:$NORMALIZED" || GUARD_TUN0_STATE=absent
+  else
+    GUARD_TUN0_STATE=absent
+  fi
+}
+
+capture_guard_baseline() {
+  active_package_list || return 1
+  require_active_packages "$ACTIVE_PACKAGES" \
+    ar.tvplayer.tv com.wireguard.android tv.sweet.tvplayer \
+    com.amazon.whisperjoin.middleware.np com.amazon.whisperjoin.wss.wifiprovisioner \
+    com.amazon.whisperlink.core.android com.amazon.whisperplay.contracts \
+    com.amazon.whisperplay.service.install com.amazon.device.settings \
+    com.amazon.device.settings.sdk.internal.library com.amazon.tv.settings.core \
+    com.amazon.tv.settings.v2 com.android.settings || return 1
+  require_wolf_ready || return 1
+  read_guard_value bluetooth_on settings get global bluetooth_on || return 1
+  GUARD_BLUETOOTH_ON=$GUARD_VALUE
+  [ "$GUARD_BLUETOOTH_ON" = 1 ] || { printf 'guard bluetooth_on expected=1 actual=%s\n' "$GUARD_BLUETOOTH_ON" >&2; return 1; }
+  read_guard_value locale getprop persist.sys.locale || return 1
+  GUARD_LOCALE=$GUARD_VALUE
+  read_guard_value system_locales getprop system_locales || return 1
+  GUARD_SYSTEM_LOCALES=$GUARD_VALUE
+  read_guard_value adb_enabled settings get global adb_enabled || return 1
+  GUARD_ADB_ENABLED=$GUARD_VALUE
+  [ "$GUARD_ADB_ENABLED" = 1 ] || { printf 'guard adb_enabled expected=1 actual=%s\n' "$GUARD_ADB_ENABLED" >&2; return 1; }
+  read_guard_value development_settings_enabled settings get global development_settings_enabled || return 1
+  GUARD_DEVELOPMENT_SETTINGS_ENABLED=$GUARD_VALUE
+  [ "$GUARD_DEVELOPMENT_SETTINGS_ENABLED" = 1 ] || { printf 'guard development_settings_enabled expected=1 actual=%s\n' "$GUARD_DEVELOPMENT_SETTINGS_ENABLED" >&2; return 1; }
+  read_guard_value persist_sys_usb_config getprop persist.sys.usb.config || return 1
+  GUARD_PERSIST_USB_CONFIG=$GUARD_VALUE
+  require_usb_adb "$GUARD_PERSIST_USB_CONFIG" || return 1
+  read_guard_value sys_usb_config getprop sys.usb.config || return 1
+  GUARD_SYS_USB_CONFIG=$GUARD_VALUE
+  require_usb_adb "$GUARD_SYS_USB_CONFIG" || return 1
+  read_guard_value service_adb_tcp_port getprop service.adb.tcp.port || return 1
+  GUARD_SERVICE_ADB_TCP_PORT=$GUARD_VALUE
+  [ "$GUARD_SERVICE_ADB_TCP_PORT" = 5555 ] || { printf 'guard service.adb.tcp.port expected=5555 actual=%s\n' "$GUARD_SERVICE_ADB_TCP_PORT" >&2; return 1; }
+  read_guard_value persist_adb_tcp_port getprop persist.adb.tcp.port || return 1
+  GUARD_PERSIST_ADB_TCP_PORT=$GUARD_VALUE
+  [ "$GUARD_PERSIST_ADB_TCP_PORT" = 5555 ] || { printf 'guard persist.adb.tcp.port expected=5555 actual=%s\n' "$GUARD_PERSIST_ADB_TCP_PORT" >&2; return 1; }
+  read_guard_value adbd pidof adbd || return 1
+  GUARD_ADBD_PID=$GUARD_VALUE
+  [ -n "$GUARD_ADBD_PID" ] || { printf '%s\n' 'guard adbd is not running' >&2; return 1; }
+  read_guard_value always_on_vpn_app settings get secure always_on_vpn_app || return 1
+  GUARD_ALWAYS_ON_VPN_APP=$GUARD_VALUE
+  read_guard_value always_on_vpn_lockdown settings get secure always_on_vpn_lockdown || return 1
+  GUARD_ALWAYS_ON_VPN_LOCKDOWN=$GUARD_VALUE
+  capture_tun0_state
+  require_home_resolver || return 1
+  require_settings_routes || return 1
+  case "$SERIAL" in
+    *:5555) ;;
+    *) printf 'guard requires a TCP adb serial ending in :5555\n' >&2; return 1 ;;
+  esac
+  read_adb_transport || return 1
+  [ "$GUARD_VALUE" = device ] || { printf 'guard TCP 5555 is not reachable: %s\n' "$GUARD_VALUE" >&2; return 1; }
+}
+
+guard_unchanged_value() {
+  guard_label=$1
+  expected_value=$2
+  shift 2
+  read_guard_value "$guard_label" "$@" || return 1
+  [ "$GUARD_VALUE" = "$expected_value" ] || {
+    printf 'guard changed %s expected=%s actual=%s\n' "$guard_label" "$expected_value" "$GUARD_VALUE" >&2
+    return 1
+  }
+}
+
+compact_guard() {
+  active_package_list || return 1
+  require_active_packages "$ACTIVE_PACKAGES" \
+    ar.tvplayer.tv com.wireguard.android tv.sweet.tvplayer \
+    com.amazon.whisperjoin.middleware.np com.amazon.whisperjoin.wss.wifiprovisioner \
+    com.amazon.whisperlink.core.android com.amazon.whisperplay.contracts \
+    com.amazon.whisperplay.service.install com.amazon.device.settings \
+    com.amazon.device.settings.sdk.internal.library com.amazon.tv.settings.core \
+    com.amazon.tv.settings.v2 com.android.settings || return 1
+  require_wolf_version || return 1
+  guard_unchanged_value bluetooth_on "$GUARD_BLUETOOTH_ON" settings get global bluetooth_on || return 1
+  guard_unchanged_value locale "$GUARD_LOCALE" getprop persist.sys.locale || return 1
+  guard_unchanged_value system_locales "$GUARD_SYSTEM_LOCALES" getprop system_locales || return 1
+  guard_unchanged_value adb_enabled "$GUARD_ADB_ENABLED" settings get global adb_enabled || return 1
+  guard_unchanged_value development_settings_enabled "$GUARD_DEVELOPMENT_SETTINGS_ENABLED" settings get global development_settings_enabled || return 1
+  guard_unchanged_value persist_sys_usb_config "$GUARD_PERSIST_USB_CONFIG" getprop persist.sys.usb.config || return 1
+  require_usb_adb "$GUARD_VALUE" || return 1
+  guard_unchanged_value sys_usb_config "$GUARD_SYS_USB_CONFIG" getprop sys.usb.config || return 1
+  require_usb_adb "$GUARD_VALUE" || return 1
+  guard_unchanged_value service_adb_tcp_port "$GUARD_SERVICE_ADB_TCP_PORT" getprop service.adb.tcp.port || return 1
+  [ "$GUARD_VALUE" = 5555 ] || return 1
+  guard_unchanged_value persist_adb_tcp_port "$GUARD_PERSIST_ADB_TCP_PORT" getprop persist.adb.tcp.port || return 1
+  [ "$GUARD_VALUE" = 5555 ] || return 1
+  guard_unchanged_value adbd "$GUARD_ADBD_PID" pidof adbd || return 1
+  [ -n "$GUARD_VALUE" ] || { printf '%s\n' 'guard adbd is not running' >&2; return 1; }
+  guard_unchanged_value always_on_vpn_app "$GUARD_ALWAYS_ON_VPN_APP" settings get secure always_on_vpn_app || return 1
+  guard_unchanged_value always_on_vpn_lockdown "$GUARD_ALWAYS_ON_VPN_LOCKDOWN" settings get secure always_on_vpn_lockdown || return 1
+  capture_tun0_state
+  [ "$GUARD_TUN0_STATE" = "$GUARD_BASELINE_TUN0_STATE" ] || {
+    printf 'guard changed tun0 presence expected=%s actual=%s\n' "$GUARD_BASELINE_TUN0_STATE" "$GUARD_TUN0_STATE" >&2
+    return 1
+  }
+  require_home_resolver || return 1
+  require_settings_routes || return 1
+  read_adb_transport || return 1
+  [ "$GUARD_VALUE" = device ] || { printf 'guard TCP 5555 is not reachable: %s\n' "$GUARD_VALUE" >&2; return 1; }
+}
+
+rollback_recorded_packages() {
+  removed_file=$1
+  rollback_file="$removed_file.rollback"
+  awk '{ lines[NR] = $0 } END { for (line = NR; line > 0; line--) print lines[line] }' "$removed_file" > "$rollback_file"
+  rollback_ok=yes
+  while IFS= read -r rollback_package; do
+    [ -n "$rollback_package" ] || continue
+    if ! restore_package "$rollback_package"; then
+      printf 'rollback failed for %s\n' "$rollback_package" >&2
+      rollback_ok=no
+    fi
+  done < "$rollback_file"
+  rm -f "$rollback_file"
+  if [ "$rollback_ok" = yes ]; then
+    : > "$removed_file"
+  fi
+  [ "$rollback_ok" = yes ]
+}
+
+rollback_batch() {
+  failed_package=$1
+  removed_file=$2
+  journal_file=$3
+  rollback_ok=yes
+  if [ -n "$failed_package" ]; then
+    printf 'rollback %s\n' "$failed_package" >> "$journal_file"
+    restore_package "$failed_package" || rollback_ok=no
+  fi
+  rollback_recorded_packages "$removed_file" || rollback_ok=no
+  [ "$rollback_ok" = yes ]
+}
+
+refresh_backup_checksums() {
+  checksum_files "$1" || {
+    printf 'could not refresh backup checksums: %s\n' "$1" >&2
+    return 1
+  }
+}
+
+plan() {
+  require_target
+  validate_manifests
+  require_restore_capability
+  plan_restore=$(restore_command)
+  script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+  while IFS= read -r package; do
+    printf 'REMOVE=%s RESTORE=%s --user 0 %s\n' "$package" "$plan_restore" "$package"
+  done < "$script_dir/../manifests/remove-user0.txt"
+  printf '%s\n' 'PLAN=PASS'
+}
+
+apply() {
+  require_target
+  validate_manifests
+  require_restore_capability
+  require_wolf_ready || exit 1
+  capture_guard_baseline || exit 1
+  GUARD_BASELINE_TUN0_STATE=$GUARD_TUN0_STATE
+  script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+  publish_audit || exit 1
+  backup_dir=$PUBLISHED_AUDIT_DIR
+  removed_file=$backup_dir/removed-successfully.txt
+  journal_file=$backup_dir/operation-journal.txt
+  : > "$journal_file"
+  refresh_backup_checksums "$backup_dir" || exit 1
+  while IFS= read -r package; do
+    active_package_list || { rollback_batch '' "$removed_file" "$journal_file"; exit 1; }
+    if ! package_list_contains "$ACTIVE_PACKAGES" "$package"; then
+      printf 'skip %s\n' "$package" >> "$journal_file"
+      refresh_backup_checksums "$backup_dir" || exit 1
+      continue
+    fi
+    printf 'attempt %s\n' "$package" >> "$journal_file"
+    refresh_backup_checksums "$backup_dir" || exit 1
+    if ! read_shell pm uninstall -k --user 0 "$package"; then
+      printf 'failure %s\n' "$package" >> "$journal_file"
+      rollback_batch "$package" "$removed_file" "$journal_file" || true
+      refresh_backup_checksums "$backup_dir" || true
+      printf 'removal failed for %s\n' "$package" >&2
+      exit 1
+    fi
+    if [ "$ACTUAL" != Success ]; then
+      printf 'failure %s\n' "$package" >> "$journal_file"
+      rollback_batch "$package" "$removed_file" "$journal_file" || true
+      refresh_backup_checksums "$backup_dir" || true
+      printf 'removal failed for %s\n' "$package" >&2
+      exit 1
+    fi
+    active_package_list || { printf 'failure %s\n' "$package" >> "$journal_file"; rollback_batch "$package" "$removed_file" "$journal_file" || true; refresh_backup_checksums "$backup_dir" || true; exit 1; }
+    if package_list_contains "$ACTIVE_PACKAGES" "$package"; then
+      printf 'failure %s\n' "$package" >> "$journal_file"
+      rollback_batch "$package" "$removed_file" "$journal_file" || true
+      refresh_backup_checksums "$backup_dir" || true
+      printf 'removal verification failed for %s\n' "$package" >&2
+      exit 1
+    fi
+    read_shell pm list packages -u || { printf 'failure %s\n' "$package" >> "$journal_file"; rollback_batch "$package" "$removed_file" "$journal_file" || true; refresh_backup_checksums "$backup_dir" || true; exit 1; }
+    if ! package_list_contains "$ACTUAL" "$package"; then
+      printf 'failure %s\n' "$package" >> "$journal_file"
+      rollback_batch "$package" "$removed_file" "$journal_file" || true
+      refresh_backup_checksums "$backup_dir" || true
+      printf 'removal verification failed for %s\n' "$package" >&2
+      exit 1
+    fi
+    printf '%s\n' "$package" >> "$removed_file"
+    refresh_backup_checksums "$backup_dir" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }
+    printf 'success %s\n' "$package" >> "$journal_file"
+    refresh_backup_checksums "$backup_dir" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }
+    if ! compact_guard; then
+      printf 'guard-failure %s\n' "$package" >> "$journal_file"
+      rollback_batch '' "$removed_file" "$journal_file" || true
+      refresh_backup_checksums "$backup_dir" || true
+      printf '%s\n' 'guard failure restored the current batch while ADB remained reachable' >&2
+      exit 1
+    fi
+  done < "$script_dir/../manifests/remove-user0.txt"
+  printf 'APPLY_OUTPUT=%s\n' "$backup_dir"
+  printf '%s\n' 'APPLY=PASS'
+}
+
+restore_backup() {
+  backup_dir=$COMMAND_ARG
+  [ -d "$backup_dir" ] || { printf 'restore backup directory does not exist: %s\n' "$backup_dir" >&2; exit 1; }
+  restore_script=$backup_dir/restore-user0.sh
+  [ -f "$restore_script" ] || { printf 'restore script is missing: %s\n' "$restore_script" >&2; exit 1; }
+  ADB=$ADB SERIAL=$SERIAL sh "$restore_script"
 }
 
 WOLF_URL=https://archive.org/download/wolf-launcher-0.1.9-wolf_202110/WolfLauncher_0.1.9-Wolf.apk
@@ -560,16 +922,19 @@ case "$COMMAND" in
   audit)
     audit
     ;;
+  plan)
+    plan
+    ;;
   apply)
     [ "$YES" = yes ] || { printf '%s\n' '--yes is required for apply' >&2; exit 64; }
-    require_target
-    validate_manifests
-    require_restore_capability
-    printf '%s\n' 'No mutation is implemented.'
+    apply
     ;;
   install-wolf)
     [ "$YES" = yes ] || { printf '%s\n' '--yes is required for install-wolf' >&2; exit 64; }
     install_wolf
+    ;;
+  restore)
+    restore_backup
     ;;
   *)
     usage
