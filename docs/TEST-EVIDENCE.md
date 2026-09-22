@@ -32,6 +32,9 @@ failure, and wrong root focus. It accepts a resumed stock subpage only when the
 component is in the exact route table and only for the one-time HUD-entry proof;
 protected route navigation always starts from a newly launched, exactly focused
 stock Settings root.
+Fixture coverage also makes key 176 succeed without changing focus, requires
+the logged long-press fallback to recover, and rejects both-entry no-ops or a
+wrong focus after both methods.
 
 The stock-menu fixture also models the observed status-zero action start that
 leaves Home focused. Coverage proves this no-op still succeeds only through the

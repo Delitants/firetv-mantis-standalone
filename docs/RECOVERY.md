@@ -32,7 +32,10 @@ foreign, or changed route components.
 then checks a focused component and non-empty hierarchy without changing a
 setting. It first opens the exact `com.amazon.tv.settings.v2/.hud.HudActivity`,
 requires the `hud_settings_button` node to be enabled, focusable, and clickable,
-and proves that four Right events plus Select enter the stock Settings task. A
+and proves that four Right events plus Select enter the stock Settings task.
+Key 176 is tried first, but its command status is not trusted: if bounded exact
+HUD-focus checks miss, long-press Home is tried and must prove that same focus.
+Failure of both entry methods cleans up and stops verification. A
 resumed subpage is valid for this user-facing HUD proof only when it is an exact
 component already present in the protected Settings route table; unchanged HUD
 focus and unknown `settings.v2` activities fail closed. Accessibility,

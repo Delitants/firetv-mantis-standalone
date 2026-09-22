@@ -952,11 +952,34 @@ hud_post_select_component_allowed() {
   '
 }
 
+settings_focus_matches_silent() {
+  silent_focus_expected=$1
+  silent_focus_tries=0
+  while [ "$silent_focus_tries" -lt 3 ]; do
+    if read_shell dumpsys window windows 2>/dev/null; then
+      silent_focus=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
+      if [ -n "$silent_focus" ] &&
+        [ "$(normalize_component "$silent_focus")" = "$(normalize_component "$silent_focus_expected")" ]; then
+        SETTINGS_CURRENT_FOCUS=$silent_focus
+        return 0
+      fi
+    fi
+    silent_focus_tries=$((silent_focus_tries + 1))
+    [ "$silent_focus_tries" -ge 3 ] || sleep 1
+  done
+  return 1
+}
+
 prove_stock_settings_hud() {
-  if ! settings_key 176; then
-    settings_key --longpress 3 || { settings_cleanup; return 1; }
+  settings_key 176 >/dev/null 2>&1 || true
+  if ! settings_focus_matches_silent com.amazon.tv.settings.v2/.hud.HudActivity; then
+    settings_key --longpress 3 >/dev/null 2>&1 || true
+    settings_focus_matches_silent com.amazon.tv.settings.v2/.hud.HudActivity || {
+      printf '%s\n' 'HUD entry failed after keyevent 176 and long-press Home' >&2
+      settings_cleanup
+      return 1
+    }
   fi
-  settings_focus com.amazon.tv.settings.v2/.hud.HudActivity || { settings_cleanup; return 1; }
   read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || { settings_cleanup; return 1; }
   read_shell cat /sdcard/mantis-ui-smoke.xml || { settings_cleanup; return 1; }
   printf '%s\n' "$ACTUAL" | awk '

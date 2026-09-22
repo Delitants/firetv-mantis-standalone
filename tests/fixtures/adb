@@ -425,7 +425,10 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
     event=${3:-}; [ "$event" != --longpress ] || event="--longpress:${4:-}"
     case "$state" in
       '')
-        case "$event" in 176|--longpress:3) write_ui_state hud ;; esac
+        case "$event" in
+          176) [ "${FAKE_KEY176_NOOP:-0}" = 1 ] || write_ui_state hud ;;
+          --longpress:3) [ "${FAKE_LONGPRESS3_NOOP:-0}" = 1 ] || write_ui_state hud ;;
+        esac
         ;;
       hud|hud-sequence:*)
         case "$state" in hud) history=$event ;; *) history=${state#hud-sequence:},$event ;; esac

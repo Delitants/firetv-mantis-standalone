@@ -19,6 +19,8 @@ focusable, clickable Settings tile once. Because tile selection may resume a
 known stock subpage, its post-Select focus must match the exact Settings route
 table or stock root. Every permission-protected route is then navigated from a
 fresh, explicit launch of the exact stock Settings root.
+HUD entry observes exact focus after key 176 and falls back to long-press Home
+when that key reports success without opening the HUD.
 Fire OS may return success for a protected action without leaving Home; that
 result is not trusted and still must pass the explicit root and route checks.
 

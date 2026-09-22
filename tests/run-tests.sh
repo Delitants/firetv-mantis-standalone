@@ -40,6 +40,7 @@ unset FAKE_SETTINGS_ROUTES_VERBOSE FAKE_AFTER_DISABLE_SETTINGS_ROUTE_ACTION FAKE
 unset FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE
 unset FAKE_HUD_SETTINGS_TILE FAKE_HUD_POST_SELECT_FOCUS FAKE_ROOT_START_RESULT FAKE_ROOT_FOCUS
 unset FAKE_STOCK_MENU_STATUS0_ACTION FAKE_STOCK_MENU_WRONG_ERROR_ACTION
+unset FAKE_KEY176_NOOP FAKE_LONGPRESS3_NOOP
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PM_HELP_STATUS FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
 unset FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK FAKE_WOLF_INSTALL_LOCATION
@@ -193,6 +194,7 @@ prepare_package_state() {
   unset FAKE_CURRENT_FOCUS FAKE_WOLF_FOCUS_DELAY FAKE_WOLF_FOCUS_DELAY_FILE FAKE_NETWORK_MODEL FAKE_NETWORK_SERIAL FAKE_SERIALNO
   unset FAKE_HUD_SETTINGS_TILE FAKE_HUD_POST_SELECT_FOCUS FAKE_ROOT_START_RESULT FAKE_ROOT_FOCUS
   unset FAKE_STOCK_MENU_STATUS0_ACTION FAKE_STOCK_MENU_WRONG_ERROR_ACTION
+  unset FAKE_KEY176_NOOP FAKE_LONGPRESS3_NOOP
   unset FAKE_WOLF_STATE FAKE_WOLF_INSTALLED_VERSION_CODE FAKE_WOLF_INSTALLED_VERSION_NAME
   unset FAKE_WOLF_DUMPSYS_INDENT
   FAKE_PACKAGE_STATE=$TEST_TMP/package-state
@@ -1285,6 +1287,34 @@ assert_contains "$OUT" 'VERIFY_SETTINGS=PASS'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent 176'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
+# Break caught: keyevent 176 can return success without opening the HUD. The
+# controller must silently observe that miss, fall back to long-press Home, and
+# require exact HUD focus before inspecting the tile.
+prepare_package_state
+set_wolf_ready
+FAKE_KEY176_NOOP=1 run_verify_settings || fail "verify-settings rejected the working long-press HUD fallback: $ERR"
+assert_contains "$OUT" 'UI_SMOKE=PASS'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent --longpress 3'
+assert_not_contains "$ERR" 'Settings intermediate focus expected='
+
+# Neither a second no-op nor a wrong focused activity can satisfy HUD entry.
+prepare_package_state
+set_wolf_ready
+if FAKE_KEY176_NOOP=1 FAKE_LONGPRESS3_NOOP=1 run_verify_settings; then
+  fail 'verify-settings accepted two successful HUD-entry no-ops'
+fi
+assert_contains "$ERR" 'HUD entry failed after keyevent 176 and long-press Home'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent --longpress 3'
+assert_not_contains "$OUT" 'UI_SMOKE=PASS'
+prepare_package_state
+set_wolf_ready
+if FAKE_CURRENT_FOCUS=com.example/.Wrong run_verify_settings; then
+  fail 'verify-settings accepted wrong focus after both HUD-entry methods'
+fi
+assert_contains "$ERR" 'HUD entry failed after keyevent 176 and long-press Home'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent --longpress 3'
+assert_not_contains "$OUT" 'UI_SMOKE=PASS'
+
 # Break caught: Fire OS may report a successful stock-menu action start while
 # leaving Home focused. Status zero is safe only because the controller then
 # opens and verifies the exact stock root before deterministic navigation.
@@ -1369,14 +1399,14 @@ if FAKE_ROOT_FOCUS=com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity
 fi
 assert_contains "$ERR" 'Settings intermediate focus expected=com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
-# Break caught: a stale component elsewhere in dumpsys cannot satisfy exact
-# current-focus verification, and failure must clean the UI dump and return.
+# Break caught: a stale component elsewhere in dumpsys cannot satisfy either
+# exact HUD-entry focus check, and final failure must clean up and return.
 prepare_package_state
 set_wolf_ready
 if FAKE_CURRENT_FOCUS=com.example/.Wrong FAKE_UI_STATE="$TEST_TMP/ui-state" run_verify_settings; then
   fail 'verify-settings accepted a wrong current focus'
 fi
-assert_contains "$ERR" 'Settings intermediate focus expected='
+assert_contains "$ERR" 'HUD entry failed after keyevent 176 and long-press Home'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell rm -f /sdcard/mantis-ui-smoke.xml'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent 3'
 assert_not_contains "$OUT" 'UI_SMOKE=PASS'
