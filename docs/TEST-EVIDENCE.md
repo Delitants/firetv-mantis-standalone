@@ -33,6 +33,11 @@ component is in the exact route table and only for the one-time HUD-entry proof;
 protected route navigation always starts from a newly launched, exactly focused
 stock Settings root.
 
+The stock-menu fixture also models the observed status-zero action start that
+leaves Home focused. Coverage proves this no-op still succeeds only through the
+separately launched and verified stock root, while a nonzero result with any
+error other than the exact Amazon launcher permission denial is rejected.
+
 Package tests use the enabled inventory as the operative set and require each
 successful candidate to move into the disabled inventory. They cover missing
 help syntax, already-disabled skips, silent no-effect rejection, interruption

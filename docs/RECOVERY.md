@@ -40,7 +40,10 @@ Display & Sounds, Date & Time, Language, and the main Settings action are
 permission-protected from direct action launch on this Fire OS build. After the
 expected permission denial, each protected route explicitly launches
 `com.amazon.tv.launcher/.ui.MainSettingsActivity`, verifies exact root focus,
-then follows deterministic D-pad navigation. A missing hierarchy is a failure.
+then follows deterministic D-pad navigation. If Fire OS instead returns status
+zero while leaving Home focused, the same explicit root path is required. A
+nonzero result must contain the exact Amazon launcher permission denial; other
+errors fail closed. A missing hierarchy is a failure.
 
 Audit and plan must both report:
 

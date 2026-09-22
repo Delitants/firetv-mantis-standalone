@@ -397,9 +397,16 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
       action=${4}
       case "$action" in
         android.settings.SETTINGS|android.settings.ACCESSIBILITY_SETTINGS|android.settings.DISPLAY_SETTINGS|com.amazon.device.settings.action.DATE_TIME|com.amazon.device.settings.action.LANGUAGE)
-          write_ui_state "protected:$action"
-          printf '%s\n' 'Permission Denial: starting Intent requires com.amazon.tv.permission.LAUNCHER_SETTINGS' >&2
-          exit 1
+          if [ "${FAKE_STOCK_MENU_STATUS0_ACTION:-}" = "$action" ]; then
+            value="Starting: Intent { act=$action }"
+          elif [ "${FAKE_STOCK_MENU_WRONG_ERROR_ACTION:-}" = "$action" ]; then
+            printf '%s\n' 'Error: Activity not started' >&2
+            exit 1
+          else
+            write_ui_state "protected:$action"
+            printf '%s\n' 'Permission Denial: starting Intent requires com.amazon.tv.permission.LAUNCHER_SETTINGS' >&2
+            exit 1
+          fi
           ;;
         *)
           settings_route "$action" >/dev/null || { printf 'unknown fake Settings action: %s\n' "$action" >&2; exit 64; }

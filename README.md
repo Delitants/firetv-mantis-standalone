@@ -19,6 +19,8 @@ focusable, clickable Settings tile once. Because tile selection may resume a
 known stock subpage, its post-Select focus must match the exact Settings route
 table or stock root. Every permission-protected route is then navigated from a
 fresh, explicit launch of the exact stock Settings root.
+Fire OS may return success for a protected action without leaving Home; that
+result is not trusted and still must pass the explicit root and route checks.
 
 Fire OS may print a diagnostic metadata line before a resolved component.
 Audit preserves those raw Settings resolver lines separately and stores a

@@ -1045,6 +1045,9 @@ verify_settings() {
     start_settings_action "$settings_action"
     case "$route_kind:$SETTINGS_START_STATUS" in
       shell:0) ;;
+      stock-menu:0)
+        stock_menu_settings_navigation "$settings_action" || { settings_cleanup; exit 1; }
+        ;;
       stock-menu:*)
         case "$SETTINGS_START_OUTPUT" in
           *com.amazon.tv.permission.LAUNCHER_SETTINGS*) ;;
