@@ -8,8 +8,12 @@ disablement.
 
 The preservation lists cover stock Settings and its dependencies, Home,
 Bluetooth/input, networking, DIAL/SSDP, Whisper services, package installation,
-and recovery support. The three protected user applications are preserved even
+and recovery support. The four protected user applications are preserved even
 when a generic package category might otherwise make them appear removable.
+The exact NS6711 build also reports `com.amazon.ftvads.deeplinking` as a
+protected package when `pm disable-user --user 0` is attempted. It is a
+mandatory core preserve entry and must remain enabled; it is not a successful
+or supported debloat item on this model/build.
 
 The enabled package inventory (`pm list packages -e`) is the operative set.
 Each candidate must begin enabled, then be absent from that inventory and

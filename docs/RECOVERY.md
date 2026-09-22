@@ -62,6 +62,9 @@ prove both syntaxes. `apply` disables packages for user 0; it does not uninstall
 their APKs or modify the system image. The checksummed backup records only
 candidates whose transition to the disabled inventory was verified. Candidates
 that were already disabled are skipped and are not later enabled by restore.
+Do not manually disable `com.amazon.ftvads.deeplinking`: this exact NS6711 build
+marks it protected, and the controller requires it to remain enabled through
+the core-preservation guard.
 
 If the screen is black or the launcher path is unhealthy, stop package actions.
 Keep the stock remote path, return to stock Home/Settings, and restore the

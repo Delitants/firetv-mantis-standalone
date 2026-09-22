@@ -50,12 +50,15 @@ help syntax, already-disabled skips, silent no-effect rejection, interruption
 between disable and journal success, reverse restore, partial enable failure,
 interruption after enable but before ledger pruning, an enable that mutates
 state while returning nonzero, post-enable guard failure, checksum/tamper
-rejection, and the exact 32-entry candidate manifest. These are controller
-tests, not a claim that a live package transition or reboot passed. The same
-full suite is exercised with the local default `sh` and `/bin/dash`. Generated
-recovery is tested as a resumable controller entry point, including checksum and
-mode binding, manifest membership, disabled-before/enabled-after state, and
-idempotent completion after the ledger is empty.
+rejection, the exact 31-entry candidate manifest, and the 51-entry combined
+preservation set. `com.amazon.ftvads.deeplinking` is asserted present in core
+preservation, absent from candidates, and absent from plan/apply disable calls.
+These are controller tests, not a claim that a live package transition or
+reboot passed. The same full suite is exercised with the local default `sh` and
+`/bin/dash`. Generated recovery is tested as a resumable controller entry point,
+including checksum and mode binding, manifest membership,
+disabled-before/enabled-after state, and idempotent completion after the ledger
+is empty.
 
 Resolver tests cover legacy one-line output and production-shaped Fire OS
 metadata plus component output. Raw Settings resolver evidence is kept separate

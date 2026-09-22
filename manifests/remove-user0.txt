@@ -6,7 +6,6 @@ com.amazon.cloud9
 com.amazon.firebat
 com.amazon.ftv.profilepicker
 com.amazon.ftv.screensaver
-com.amazon.ftvads.deeplinking
 com.amazon.gamehub
 com.amazon.hedwig
 com.amazon.imdb.tv.android.app
