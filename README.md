@@ -52,6 +52,13 @@ controller. On the recorded deployment, the Android framework locale was set
 separately to `uk-UA`; Amazon Settings remains partly English because its APKs
 do not contain Ukrainian resources.
 
+An optional, permission-free Settings tile source is in
+[`settings-tile/`](settings-tile/README.md). It opens the exported stock
+`com.amazon.tv.launcher/.ui.MainSettingsActivity` while the stock Home
+component stays disabled. The app label is English by default and Ukrainian
+when the device uses that locale. The locally signed APK and signing key are
+not published.
+
 The package operation is `pm disable-user --user 0`; recovery is
 `pm enable --user 0`. Apps remain installed in the system image. The
 controller will not apply unless `pm help` proves both exact command forms,

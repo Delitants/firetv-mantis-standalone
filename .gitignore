@@ -1,2 +1,4 @@
 .DS_Store
 *.apk
+settings-tile/build/
+settings-tile/dist/

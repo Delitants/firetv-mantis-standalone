@@ -26,6 +26,14 @@ APKs, exploit material, backups, or screenshots.
 - The Android framework configuration reports `uk-UA`. This locale change was
   made outside this repository. Fire OS screens without Ukrainian resources
   continue to render their embedded English strings.
+- A locally signed Settings tile built from `settings-tile/` was installed
+  after the main deployment. It opens the exported stock Settings root from
+  Wolf Home. The Wolf and two Downloads tiles were hidden in Wolf's layout;
+  their packages and Download Manager remain enabled.
+- After a further reboot, selecting the Settings tile again focused the stock
+  `MainSettingsActivity`. Wolf remained Home, both ADB transports reconnected,
+  and the hidden tiles remained absent from Home. The Settings Applications
+  page opened the Downloads app information screen; it does not offer Launch.
 
 ## Post-reboot acceptance
 
