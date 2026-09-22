@@ -903,6 +903,81 @@ settings_cleanup() {
   adb_shell input keyevent 3 >/dev/null 2>&1 || true
 }
 
+normalize_component() {
+  case "$1" in
+    */.*) component_package=${1%%/*}; printf '%s/%s.%s\n' "$component_package" "$component_package" "${1#*/.}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+settings_current_focus() {
+  read_shell dumpsys window windows || return 1
+  SETTINGS_CURRENT_FOCUS=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
+  [ -n "$SETTINGS_CURRENT_FOCUS" ] || {
+    printf '%s\n' 'Settings current focus is missing' >&2
+    return 1
+  }
+}
+
+settings_focus() {
+  settings_focus_expected=$1
+  settings_current_focus || return 1
+  [ "$(normalize_component "$SETTINGS_CURRENT_FOCUS")" = "$(normalize_component "$settings_focus_expected")" ] || {
+    printf 'Settings intermediate focus expected=%s actual=%s\n' "$settings_focus_expected" "$SETTINGS_CURRENT_FOCUS" >&2
+    return 1
+  }
+}
+
+settings_key() {
+  adb_shell input keyevent "$@" >/dev/null || return 1
+  sleep 1
+}
+
+prove_stock_settings_hud() {
+  if ! settings_key 176; then
+    settings_key --longpress 3 || { settings_cleanup; return 1; }
+  fi
+  settings_focus com.amazon.tv.settings.v2/.hud.HudActivity || { settings_cleanup; return 1; }
+  read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || { settings_cleanup; return 1; }
+  read_shell cat /sdcard/mantis-ui-smoke.xml || { settings_cleanup; return 1; }
+  printf '%s\n' "$ACTUAL" | awk '
+    BEGIN { RS = "<node " }
+    index($0, "resource-id=\"com.amazon.tv.settings.v2:id/hud_settings_button\"") &&
+    index($0, "enabled=\"true\"") && index($0, "focusable=\"true\"") &&
+    index($0, "clickable=\"true\"") { found++ }
+    END { exit found == 1 ? 0 : 1 }
+  ' || {
+    printf '%s\n' 'HUD Settings tile is missing or unusable' >&2
+    settings_cleanup
+    return 1
+  }
+  for hud_step in 1 2 3 4; do settings_key 22 || { settings_cleanup; return 1; }; done
+  settings_key 23 || { settings_cleanup; return 1; }
+  settings_current_focus || { settings_cleanup; return 1; }
+  normalized_hud_target=$(normalize_component "$SETTINGS_CURRENT_FOCUS")
+  case "$normalized_hud_target" in
+    com.amazon.tv.launcher/com.amazon.tv.launcher.ui.MainSettingsActivity|com.amazon.tv.settings.v2/com.amazon.tv.settings.v2.*) ;;
+    *)
+      printf 'HUD Settings selection left the stock Settings task: %s\n' "$SETTINGS_CURRENT_FOCUS" >&2
+      settings_cleanup
+      return 1
+      ;;
+  esac
+  settings_cleanup
+}
+
+open_stock_settings_root() {
+  root_launch=$(adb_shell am start -n com.amazon.tv.launcher/.ui.MainSettingsActivity 2>&1) || {
+    printf '%s\n' 'stock Settings root launch failed' >&2
+    return 1
+  }
+  case "$root_launch" in
+    *'Starting: Intent'*) ;;
+    *) printf '%s\n' 'stock Settings root launch failed' >&2; return 1 ;;
+  esac
+  settings_focus com.amazon.tv.launcher/.ui.MainSettingsActivity
+}
+
 assert_settings_ui() {
   settings_action=$1
   expected_focus=$2
@@ -910,7 +985,6 @@ assert_settings_ui() {
   while :; do
     read_shell dumpsys window windows || { settings_cleanup; return 1; }
     focus=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
-    normalize_component() { case "$1" in */.*) p=${1%%/*}; printf '%s/%s.%s\n' "$p" "$p" "${1#*/.}" ;; *) printf '%s\n' "$1" ;; esac; }
     [ "$(normalize_component "$focus")" = "$(normalize_component "$expected_focus")" ] && break
     tries=$((tries + 1)); [ "$tries" -lt 3 ] || { printf 'Settings focus expected=%s actual=%s action=%s\n' "$expected_focus" "$focus" "$settings_action" >&2; settings_cleanup; return 1; }
     sleep 1
@@ -929,19 +1003,7 @@ stock_menu_settings_navigation() {
   # protected routes within stock UI; no shell settings launch or setting write
   # is attempted. A changed layout fails the subsequent focused-UI assertion.
   settings_action=$1
-  settings_key() { adb_shell input keyevent "$@" >/dev/null || return 1; sleep 1; }
-  settings_focus() {
-    expected=$1
-    read_shell dumpsys window windows || return 1
-    actual=$(printf '%s\n' "$ACTUAL" | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
-    normalize() { case "$1" in */.*) p=${1%%/*}; printf '%s/%s.%s\n' "$p" "$p" "${1#*/.}" ;; *) printf '%s\n' "$1" ;; esac; }
-    [ "$(normalize "$actual")" = "$(normalize "$expected")" ] || { printf 'Settings intermediate focus expected=%s actual=%s\n' "$expected" "$actual" >&2; return 1; }
-  }
-  settings_key --longpress 3 || return 1
-  settings_focus com.amazon.tv.launcher/.HudActivity || return 1
-  for n in 1 2 3 4; do settings_key 22 || return 1; done
-  settings_key 23 || return 1
-  settings_focus com.amazon.tv.launcher/.ui.MainSettingsActivity || return 1
+  open_stock_settings_root || return 1
   case "$settings_action" in
     android.settings.SETTINGS) ;;
     android.settings.DISPLAY_SETTINGS) settings_key 20 || return 1; settings_key 23 || return 1 ;;
@@ -956,6 +1018,7 @@ stock_menu_settings_navigation() {
 
 verify_settings() {
   require_target
+  prove_stock_settings_hud || exit 1
   settings_route_lines | while IFS='|' read -r settings_action expected_component expected_focus route_kind; do
     read_shell cmd package resolve-activity --brief -a "$settings_action" || { settings_cleanup; exit 1; }
     resolver_raw=$ACTUAL
@@ -967,7 +1030,6 @@ verify_settings() {
     start_settings_action "$settings_action"
     case "$route_kind:$SETTINGS_START_STATUS" in
       shell:0) ;;
-      stock-menu:0) stock_menu_settings_navigation "$settings_action" || { settings_cleanup; exit 1; } ;;
       stock-menu:*)
         case "$SETTINGS_START_OUTPUT" in
           *com.amazon.tv.permission.LAUNCHER_SETTINGS*) ;;

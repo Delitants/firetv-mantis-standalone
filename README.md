@@ -14,6 +14,11 @@ Start with an audit, read the generated restore script, run `--baseline AUDIT_DI
 Settings routes and backs out; it never writes a setting. See
 `docs/RECOVERY.md` before using `apply` or `restore`.
 
+The Settings smoke test proves the build's `settings.v2` HUD and its enabled,
+focusable, clickable Settings tile once. Because tile selection may resume a
+stock subpage, every permission-protected route is then navigated from a fresh,
+explicit launch of the exact stock Settings root.
+
 Fire OS may print a diagnostic metadata line before a resolved component.
 Audit preserves those raw Settings resolver lines separately and stores a
 strictly parsed, checksummed ten-route component map. Package guards and fresh

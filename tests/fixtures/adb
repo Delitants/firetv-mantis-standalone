@@ -159,7 +159,7 @@ settings_route() {
 ui_focus_for_action() {
   case "$1" in
     wolf) printf '%s\n' 'com.wolf.firelauncher/.screens.launcher.LauncherActivity' ;;
-    HudActivity) printf '%s\n' 'com.amazon.tv.launcher/.HudActivity' ;;
+    HudActivity) printf '%s\n' 'com.amazon.tv.settings.v2/.hud.HudActivity' ;;
     MainSettingsActivity) printf '%s\n' 'com.amazon.tv.launcher/.ui.MainSettingsActivity' ;;
     PreferencesActivity) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity' ;;
     android.settings.SETTINGS) printf '%s\n' 'com.amazon.tv.launcher/.ui.MainSettingsActivity' ;;
@@ -384,6 +384,15 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
     if [ "${2:-}" = start ] && [ "${3:-}" = -n ] && [ "${4:-}" = com.wolf.firelauncher/.screens.launcher.LauncherActivity ]; then
       write_ui_state wolf
       value='Starting: Intent { cmp=com.wolf.firelauncher/.screens.launcher.LauncherActivity }'
+    elif [ "${2:-}" = start ] && [ "${3:-}" = -n ] && [ "${4:-}" = com.amazon.tv.launcher/.ui.MainSettingsActivity ]; then
+      if [ "${FAKE_ROOT_START_RESULT:-success}" = failure ]; then
+        printf '%s\n' 'Error: Activity not started' >&2
+        exit 1
+      fi
+      state=$(read_ui_state 2>/dev/null || true)
+      case "$state" in protected:*) route=${state#protected:} ;; *) route=android.settings.SETTINGS ;; esac
+      write_ui_state "root:$route"
+      value='Starting: Intent { cmp=com.amazon.tv.launcher/.ui.MainSettingsActivity }'
     elif [ "${2:-}" = start ] && [ "${3:-}" = -a ] && [ -n "${4:-}" ]; then
       action=${4}
       case "$action" in
@@ -408,19 +417,28 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
     state=$(read_ui_state 2>/dev/null || true)
     event=${3:-}; [ "$event" != --longpress ] || event="--longpress:${4:-}"
     case "$state" in
-      protected:*) write_ui_state "sequence:${state#protected:}:$event" ;;
-      sequence:*)
-        route=${state#sequence:}; route=${route%%:*}
+      '')
+        case "$event" in 176|--longpress:3) write_ui_state hud ;; esac
+        ;;
+      hud|hud-sequence:*)
+        case "$state" in hud) history=$event ;; *) history=${state#hud-sequence:},$event ;; esac
+        if [ "$history" = '22,22,22,22,23' ]; then write_ui_state hud-selected; else write_ui_state "hud-sequence:$history"; fi
+        ;;
+      root:*)
+        route=${state#root:}
+        case "$event" in 4|3) ;; *) write_ui_state "root-sequence:$route:$event" ;; esac
+        ;;
+      root-sequence:*)
+        route=${state#root-sequence:}; route=${route%%:*}
         history=${state#*:*:}; history="$history,$event"
         case "$route" in
-          android.settings.SETTINGS) expected='--longpress:3,22,22,22,22,23' ;;
-          android.settings.DISPLAY_SETTINGS) expected='--longpress:3,22,22,22,22,23,20,23' ;;
-          android.settings.ACCESSIBILITY_SETTINGS) expected='--longpress:3,22,22,22,22,23,20,20,22,22,23' ;;
-          com.amazon.device.settings.action.DATE_TIME) expected='--longpress:3,22,22,22,22,23,20,22,22,23' ;;
-          com.amazon.device.settings.action.LANGUAGE) expected='--longpress:3,22,22,22,22,23,20,22,22,23,20,20,20,20,20,20,20,23' ;;
+          android.settings.DISPLAY_SETTINGS) expected='20,23' ;;
+          android.settings.ACCESSIBILITY_SETTINGS) expected='20,20,22,22,23' ;;
+          com.amazon.device.settings.action.DATE_TIME) expected='20,22,22,23' ;;
+          com.amazon.device.settings.action.LANGUAGE) expected='20,22,22,23,20,20,20,20,20,20,20,23' ;;
           *) expected=never ;;
         esac
-        if [ "$history" = "$expected" ]; then write_ui_state "ready:$route"; else write_ui_state "sequence:$route:$history"; fi
+        if [ "$history" = "$expected" ]; then write_ui_state "ready:$route"; else write_ui_state "root-sequence:$route:$history"; fi
         ;;
     esac
     value=
@@ -429,14 +447,19 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
     if [ "${2:-}" = window ] && [ "${3:-}" = windows ]; then
       state=$(read_ui_state 2>/dev/null || true)
       action=${state#*:}; [ "$state" = wolf ] && action=wolf
-      case "$state" in ready:*) action=${state#ready:} ;; sequence:*|protected:*) action=wrong ;; esac
       case "$state" in
-        sequence:*:--longpress:3) action=HudActivity ;;
-        sequence:*:--longpress:3,22,22,22,22,23) action=MainSettingsActivity ;;
-        sequence:*:--longpress:3,22,22,22,22,23,20,22,22,23) action=PreferencesActivity ;;
+        ready:*) action=${state#ready:} ;;
+        hud|hud-sequence:*) action=HudActivity ;;
+        hud-selected) focus=${FAKE_HUD_POST_SELECT_FOCUS:-com.amazon.tv.launcher/.ui.MainSettingsActivity}; action=explicit ;;
+        root:*) action=MainSettingsActivity ;;
+        root-sequence:*|protected:*) action=wrong ;;
+      esac
+      case "$state" in
+        root-sequence:*:20,22,22,23) action=PreferencesActivity ;;
       esac
       [ "$action" != "$state" ] || action=wolf
-      focus=$(ui_focus_for_action "$action")
+      [ "$action" = explicit ] || focus=$(ui_focus_for_action "$action")
+      if [ "$action" = MainSettingsActivity ] && [ -n "${FAKE_ROOT_FOCUS:-}" ]; then focus=$FAKE_ROOT_FOCUS; fi
       [ -z "${FAKE_CURRENT_FOCUS:-}" ] || focus=$FAKE_CURRENT_FOCUS
       if [ "$action" = wolf ] && [ -n "${FAKE_WOLF_FOCUS_DELAY_FILE:-}" ]; then
         seen=0; [ -f "$FAKE_WOLF_FOCUS_DELAY_FILE" ] && seen=$(cat "$FAKE_WOLF_FOCUS_DELAY_FILE")
@@ -474,7 +497,18 @@ versionName=$wolf_version_name"
     [ "${2:-}" = /sdcard/mantis-ui-smoke.xml ] || { printf 'unsupported fake cat command: %s\n' "$*" >&2; exit 64; }
     state=$(read_ui_state 2>/dev/null || true)
     action=${state#*:}
-    if [ "$action" = "${FAKE_UI_EMPTY_ACTION:-}" ]; then value='<hierarchy></hierarchy>'; else value='<hierarchy><node text="Settings" /></hierarchy>'; fi
+    case "$state" in
+      hud|hud-sequence:*)
+        case "${FAKE_HUD_SETTINGS_TILE:-valid}" in
+          missing) value='<hierarchy><node text="Profiles" resource-id="com.amazon.tv.settings.v2:id/hud_profiles_button" enabled="true" focusable="true" focused="true" clickable="true" /></hierarchy>' ;;
+          nonclickable) value='<hierarchy><node text="Settings" resource-id="com.amazon.tv.settings.v2:id/hud_settings_button" enabled="true" focusable="true" clickable="false" /></hierarchy>' ;;
+          *) value='<hierarchy><node text="Profiles" resource-id="com.amazon.tv.settings.v2:id/hud_profiles_button" enabled="true" focusable="true" focused="true" clickable="true" /><node text="Settings" resource-id="com.amazon.tv.settings.v2:id/hud_settings_button" enabled="true" focusable="true" focused="false" clickable="true" /></hierarchy>' ;;
+        esac
+        ;;
+      *)
+        if [ "$action" = "${FAKE_UI_EMPTY_ACTION:-}" ]; then value='<hierarchy></hierarchy>'; else value='<hierarchy><node text="Settings" /></hierarchy>'; fi
+        ;;
+    esac
     ;;
   rm)
     [ "${2:-}" = -f ] && [ "${3:-}" = /sdcard/mantis-ui-smoke.xml ] || { printf 'unsupported fake rm command: %s\n' "$*" >&2; exit 64; }

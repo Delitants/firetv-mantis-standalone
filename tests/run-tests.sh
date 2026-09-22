@@ -38,6 +38,7 @@ unset FAKE_ENABLE_INTERRUPT_MARKER FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE FAKE_AF
 unset FAKE_HOME_RESOLVER FAKE_HOME_RESOLVER_VERBOSE FAKE_AFTER_DISABLE_HOME_RESOLVER FAKE_INTERRUPT_MARKER FAKE_NETSTAT
 unset FAKE_SETTINGS_ROUTES_VERBOSE FAKE_AFTER_DISABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_DISABLE_SETTINGS_ROUTE_VALUE
 unset FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE
+unset FAKE_HUD_SETTINGS_TILE FAKE_HUD_POST_SELECT_FOCUS FAKE_ROOT_START_RESULT FAKE_ROOT_FOCUS
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PM_HELP_STATUS FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
 unset FAKE_WOLF_CURL_EXPECTED_URL FAKE_WOLF_SIZE FAKE_WOLF_PACKAGE FAKE_WOLF_VERSION_CODE
 unset FAKE_WOLF_VERSION_NAME FAKE_WOLF_MIN_SDK FAKE_WOLF_TARGET_SDK FAKE_WOLF_INSTALL_LOCATION
@@ -189,6 +190,7 @@ prepare_package_state() {
   unset FAKE_ADB_STATE FAKE_ALWAYS_ON_VPN_APP FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_TUN0
   unset FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION FAKE_UI_STATE
   unset FAKE_CURRENT_FOCUS FAKE_WOLF_FOCUS_DELAY FAKE_WOLF_FOCUS_DELAY_FILE FAKE_NETWORK_MODEL FAKE_NETWORK_SERIAL FAKE_SERIALNO
+  unset FAKE_HUD_SETTINGS_TILE FAKE_HUD_POST_SELECT_FOCUS FAKE_ROOT_START_RESULT FAKE_ROOT_FOCUS
   unset FAKE_WOLF_STATE FAKE_WOLF_INSTALLED_VERSION_CODE FAKE_WOLF_INSTALLED_VERSION_NAME
   unset FAKE_WOLF_DUMPSYS_INDENT
   FAKE_PACKAGE_STATE=$TEST_TMP/package-state
@@ -1278,6 +1280,53 @@ run_verify_settings || fail "verify-settings rejected the complete safe fixture:
 assert_contains "$OUT" 'SETTINGS_ROUTES=PASS'
 assert_contains "$OUT" 'DEVELOPER_OPTIONS=PASS'
 assert_contains "$OUT" 'VERIFY_SETTINGS=PASS'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent 176'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+
+# Break caught: HUD selection proves the user-facing path even when Settings
+# resumes a stock subpage; protected routes must still begin from direct root.
+prepare_package_state
+set_wolf_ready
+FAKE_HUD_POST_SELECT_FOCUS=com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity \
+  run_verify_settings || fail "verify-settings rejected a resumed stock HUD subpage: $ERR"
+assert_contains "$OUT" 'UI_SMOKE=PASS'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+
+# Break caught: HUD evidence needs the exact usable Settings tile, not merely a
+# HUD focus or a similarly named/disabled node.
+prepare_package_state
+set_wolf_ready
+if FAKE_HUD_SETTINGS_TILE=missing run_verify_settings; then
+  fail 'verify-settings accepted a HUD without the Settings tile'
+fi
+assert_contains "$ERR" 'HUD Settings tile is missing or unusable'
+prepare_package_state
+set_wolf_ready
+if FAKE_HUD_SETTINGS_TILE=nonclickable run_verify_settings; then
+  fail 'verify-settings accepted a nonclickable HUD Settings tile'
+fi
+assert_contains "$ERR" 'HUD Settings tile is missing or unusable'
+
+# Break caught: selecting the HUD tile must remain inside an allowed stock
+# Settings task, and deterministic protected navigation requires exact root.
+prepare_package_state
+set_wolf_ready
+if FAKE_HUD_POST_SELECT_FOCUS=com.example/.Foreign run_verify_settings; then
+  fail 'verify-settings accepted foreign focus after HUD Settings selection'
+fi
+assert_contains "$ERR" 'HUD Settings selection left the stock Settings task'
+prepare_package_state
+set_wolf_ready
+if FAKE_ROOT_START_RESULT=failure run_verify_settings; then
+  fail 'verify-settings accepted failure to launch the stock Settings root'
+fi
+assert_contains "$ERR" 'stock Settings root launch failed'
+prepare_package_state
+set_wolf_ready
+if FAKE_ROOT_FOCUS=com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity run_verify_settings; then
+  fail 'verify-settings navigated a protected route without exact stock root focus'
+fi
+assert_contains "$ERR" 'Settings intermediate focus expected=com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
 # Break caught: a stale component elsewhere in dumpsys cannot satisfy exact
 # current-focus verification, and failure must clean the UI dump and return.

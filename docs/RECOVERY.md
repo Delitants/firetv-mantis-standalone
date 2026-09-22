@@ -30,10 +30,15 @@ foreign, or changed route components.
 
 `verify-settings` resolves every essential route, including Developer Options,
 then checks a focused component and non-empty hierarchy without changing a
-setting. Accessibility, Display & Sounds, Date & Time, and Language are
-permission-protected from shell launch on this Fire OS build. Their smoke path
-uses the stock long-press-Home HUD and D-pad navigation; a permission denial is
-expected only for those routes, and a missing rendered hierarchy is a failure.
+setting. It first opens the exact `com.amazon.tv.settings.v2/.hud.HudActivity`,
+requires the `hud_settings_button` node to be enabled, focusable, and clickable,
+and proves that four Right events plus Select enter the stock Settings task. A
+resumed stock subpage is valid for this user-facing HUD proof. Accessibility,
+Display & Sounds, Date & Time, Language, and the main Settings action are
+permission-protected from direct action launch on this Fire OS build. After the
+expected permission denial, each protected route explicitly launches
+`com.amazon.tv.launcher/.ui.MainSettingsActivity`, verifies exact root focus,
+then follows deterministic D-pad navigation. A missing hierarchy is a failure.
 
 Audit and plan must both report:
 
