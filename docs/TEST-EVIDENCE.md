@@ -50,10 +50,11 @@ help syntax, already-disabled skips, silent no-effect rejection, interruption
 between disable and journal success, reverse restore, partial enable failure,
 interruption after enable but before ledger pruning, an enable that mutates
 state while returning nonzero, post-enable guard failure, checksum/tamper
-rejection, the exact 30-entry candidate manifest, and the 52-entry combined
-preservation set. `com.amazon.ftvads.deeplinking` and `com.amazon.tv.csapp` are
-asserted present in core preservation, absent from candidates, and absent from
-plan/apply disable calls.
+rejection, the exact 29-entry candidate manifest, and the 53-entry combined
+preservation set. `com.amazon.ftvads.deeplinking`, `com.amazon.tv.csapp`, and
+`com.amazon.venezia` are asserted present in core preservation, absent from
+candidates, absent from plan/apply disable calls, and individually enforced by
+the compact enabled-package guard.
 These are controller tests, not a claim that a live package transition or
 reboot passed. The same full suite is exercised with the local default `sh` and
 `/bin/dash`. Generated recovery is tested as a resumable controller entry point,

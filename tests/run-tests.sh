@@ -219,11 +219,13 @@ prepare_package_state() {
   unset FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE
 }
 
-[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 30 ] || fail 'remove-user0.txt must contain exactly 30 packages'
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 29 ] || fail 'remove-user0.txt must contain exactly 29 packages'
 assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.ftvads.deeplinking'
 assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.ftvads.deeplinking'
 assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.tv.csapp'
 assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.tv.csapp'
+assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.venezia'
+assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.venezia'
 
 set_wolf_ready() {
   export FAKE_WOLF_INSTALLED_VERSION_CODE=11900120
@@ -614,6 +616,7 @@ assert_contains "$OUT" 'DISABLE=com.amazon.bueller.music RESTORE=pm enable --use
 assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
 assert_not_contains "$OUT" 'com.amazon.ftvads.deeplinking'
 assert_not_contains "$OUT" 'com.amazon.tv.csapp'
+assert_not_contains "$OUT" 'com.amazon.venezia'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
 
 # Break caught: package manifests and restore ledgers are controller input, not
@@ -628,6 +631,7 @@ assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm disable-user --user 0 com.ama
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm disable-user --user 0 com.amazon.bueller.music'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0 com.amazon.ftvads.deeplinking'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0 com.amazon.tv.csapp'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0 com.amazon.venezia'
 [ "$(wc -l < "$PACKAGE_DRAIN_STDIN_DIR/disabled-successfully.txt" | tr -d ' ')" = 2 ] ||
   fail 'apply did not record both fixture packages with stdin-draining adb'
 FAKE_ADB_DRAIN_STDIN=yes run_tool restore "$PACKAGE_DRAIN_STDIN_DIR" ||
@@ -697,6 +701,23 @@ if run_tool --output "$PACKAGE_TCOMM_GUARD_DIR" --yes apply; then
 fi
 assert_contains "$ERR" 'guard missing enabled package: com.amazon.tcomm'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
+
+# The three exact-build protected-package exceptions are operative compact
+# guard inputs, not merely validator metadata.
+for protected_platform_package in com.amazon.ftvads.deeplinking com.amazon.tv.csapp com.amazon.venezia; do
+  prepare_package_state
+  awk -v package="$protected_platform_package" '
+    $1 == "active" && $2 == package { print "disabled", $2; next }
+    { print }
+  ' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+  mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
+  set_wolf_ready
+  if run_tool --output "$TEST_TMP/apply-protected-platform-guard-${protected_platform_package##*.}" --yes apply; then
+    fail "apply accepted disabled protected platform package: $protected_platform_package"
+  fi
+  assert_contains "$ERR" "guard missing enabled package: $protected_platform_package"
+  assert_not_contains "$(cat "$FAKE_ADB_LOG")" "pm disable-user --user 0 $protected_platform_package"
+done
 
 # Break caught: any alternate HOME resolver can replace the stock recovery route.
 PACKAGE_HOME_GUARD_DIR="$TEST_TMP/apply-home-guard"
@@ -1647,7 +1668,7 @@ done
 clear_wolf_ready
 unset FAKE_PACKAGE_STATE FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION
 
-[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 30 ] || fail 'test run changed the exact 30-package candidate manifest'
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 29 ] || fail 'test run changed the exact 29-package candidate manifest'
 cmp "$ORIGINAL_REMOVE" "$MANIFEST_REMOVE" >/dev/null || fail 'test run changed candidate manifest content'
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 python3 -B "$ROOT/tests/test-atomic-rename.py"

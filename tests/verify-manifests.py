@@ -39,6 +39,7 @@ MANDATORY_CORE = (
     "com.amazon.tv.launcher",
     "com.amazon.tv.routing",
     "com.amazon.uxcontrollerservice",
+    "com.amazon.venezia",
     "com.amazon.vizzini",
     "com.amazon.vizzini.ftvcds",
     "com.amazon.webview",

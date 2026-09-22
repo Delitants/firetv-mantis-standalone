@@ -26,5 +26,4 @@ com.amazon.tv.livetv
 com.amazon.tv.releasenotes
 com.amazon.tv.support
 com.amazon.tv.website_launcher
-com.amazon.venezia
 com.amazon.wha.mediabrowserservice

@@ -42,10 +42,10 @@ package inventories. Restore attempts and verified results are durably journaled
 before the successful-disable ledger is changed, so an interrupted inverse can
 be reconciled without blindly repeating `pm enable`.
 
-On the exact NS6711 build, `com.amazon.ftvads.deeplinking` and
-`com.amazon.tv.csapp` reject `disable-user` as protected packages. They are
-therefore in `preserve-core.txt`, must remain enabled, and are not counted as
-successful debloat candidates.
+On the exact NS6711 build, `com.amazon.ftvads.deeplinking`,
+`com.amazon.tv.csapp`, and `com.amazon.venezia` reject `disable-user` as
+protected packages. They are therefore in `preserve-core.txt`, must remain
+enabled, and are not counted as successful debloat candidates.
 
 Every ADB client process receives `/dev/null` as stdin. This keeps the external
 client from consuming controller-owned route, manifest, or recovery-ledger
