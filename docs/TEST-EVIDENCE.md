@@ -27,9 +27,11 @@ debloat/reboot acceptance is recorded here.
 
 The HUD fixture matches the observed `settings.v2` HUD and exact Settings tile
 attributes. Coverage rejects a missing or nonclickable tile, foreign focus after
-selection, root-launch failure, and wrong root focus. It accepts a resumed stock
-subpage only for the one-time HUD-entry proof; protected route navigation always
-starts from a newly launched, exactly focused stock Settings root.
+selection, unchanged HUD focus, unknown `settings.v2` activities, root-launch
+failure, and wrong root focus. It accepts a resumed stock subpage only when the
+component is in the exact route table and only for the one-time HUD-entry proof;
+protected route navigation always starts from a newly launched, exactly focused
+stock Settings root.
 
 Package tests use the enabled inventory as the operative set and require each
 successful candidate to move into the disabled inventory. They cover missing

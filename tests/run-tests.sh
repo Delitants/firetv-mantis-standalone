@@ -1292,6 +1292,24 @@ FAKE_HUD_POST_SELECT_FOCUS=com.amazon.tv.settings.v2/.tv.preferences.Preferences
 assert_contains "$OUT" 'UI_SMOKE=PASS'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
+# Break caught: Select must leave the HUD for a specifically known stock
+# Settings destination; unchanged HUD or an unknown settings.v2 activity is
+# not evidence that the Settings tile worked.
+prepare_package_state
+set_wolf_ready
+if FAKE_HUD_POST_SELECT_FOCUS=com.amazon.tv.settings.v2/.hud.HudActivity run_verify_settings; then
+  fail 'verify-settings accepted unchanged HUD focus after selecting Settings'
+fi
+assert_contains "$ERR" 'HUD Settings selection did not enter a known stock Settings destination'
+assert_not_contains "$OUT" 'UI_SMOKE=PASS'
+prepare_package_state
+set_wolf_ready
+if FAKE_HUD_POST_SELECT_FOCUS=com.amazon.tv.settings.v2/.unknown.UnknownActivity run_verify_settings; then
+  fail 'verify-settings accepted an unknown settings.v2 activity after selecting Settings'
+fi
+assert_contains "$ERR" 'HUD Settings selection did not enter a known stock Settings destination'
+assert_not_contains "$OUT" 'UI_SMOKE=PASS'
+
 # Break caught: HUD evidence needs the exact usable Settings tile, not merely a
 # HUD focus or a similarly named/disabled node.
 prepare_package_state
@@ -1314,7 +1332,7 @@ set_wolf_ready
 if FAKE_HUD_POST_SELECT_FOCUS=com.example/.Foreign run_verify_settings; then
   fail 'verify-settings accepted foreign focus after HUD Settings selection'
 fi
-assert_contains "$ERR" 'HUD Settings selection left the stock Settings task'
+assert_contains "$ERR" 'HUD Settings selection did not enter a known stock Settings destination'
 prepare_package_state
 set_wolf_ready
 if FAKE_ROOT_START_RESULT=failure run_verify_settings; then

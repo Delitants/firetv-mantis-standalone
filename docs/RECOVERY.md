@@ -33,7 +33,9 @@ then checks a focused component and non-empty hierarchy without changing a
 setting. It first opens the exact `com.amazon.tv.settings.v2/.hud.HudActivity`,
 requires the `hud_settings_button` node to be enabled, focusable, and clickable,
 and proves that four Right events plus Select enter the stock Settings task. A
-resumed stock subpage is valid for this user-facing HUD proof. Accessibility,
+resumed subpage is valid for this user-facing HUD proof only when it is an exact
+component already present in the protected Settings route table; unchanged HUD
+focus and unknown `settings.v2` activities fail closed. Accessibility,
 Display & Sounds, Date & Time, Language, and the main Settings action are
 permission-protected from direct action launch on this Fire OS build. After the
 expected permission denial, each protected route explicitly launches

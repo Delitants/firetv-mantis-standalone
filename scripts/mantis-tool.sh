@@ -933,6 +933,25 @@ settings_key() {
   sleep 1
 }
 
+hud_post_select_component_allowed() {
+  hud_target=$(normalize_component "$1")
+  settings_route_lines | awk -F '|' -v target="$hud_target" '
+    function normalize(value, slash, package_name) {
+      slash = index(value, "/")
+      if (slash && substr(value, slash + 1, 1) == ".") {
+        package_name = substr(value, 1, slash - 1)
+        return package_name "/" package_name substr(value, slash + 1)
+      }
+      return value
+    }
+    BEGIN {
+      if (target == "com.amazon.tv.launcher/com.amazon.tv.launcher.ui.MainSettingsActivity") allowed = 1
+    }
+    target == normalize($2) || target == normalize($3) { allowed = 1 }
+    END { exit allowed ? 0 : 1 }
+  '
+}
+
 prove_stock_settings_hud() {
   if ! settings_key 176; then
     settings_key --longpress 3 || { settings_cleanup; return 1; }
@@ -954,15 +973,11 @@ prove_stock_settings_hud() {
   for hud_step in 1 2 3 4; do settings_key 22 || { settings_cleanup; return 1; }; done
   settings_key 23 || { settings_cleanup; return 1; }
   settings_current_focus || { settings_cleanup; return 1; }
-  normalized_hud_target=$(normalize_component "$SETTINGS_CURRENT_FOCUS")
-  case "$normalized_hud_target" in
-    com.amazon.tv.launcher/com.amazon.tv.launcher.ui.MainSettingsActivity|com.amazon.tv.settings.v2/com.amazon.tv.settings.v2.*) ;;
-    *)
-      printf 'HUD Settings selection left the stock Settings task: %s\n' "$SETTINGS_CURRENT_FOCUS" >&2
-      settings_cleanup
-      return 1
-      ;;
-  esac
+  hud_post_select_component_allowed "$SETTINGS_CURRENT_FOCUS" || {
+    printf 'HUD Settings selection did not enter a known stock Settings destination: %s\n' "$SETTINGS_CURRENT_FOCUS" >&2
+    settings_cleanup
+    return 1
+  }
   settings_cleanup
 }
 
