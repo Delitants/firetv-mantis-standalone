@@ -23,6 +23,12 @@ running anything.
   remote-control services, and USB/network ADB available.
 - Leaves TiviMate, WireGuard, and Sweet TV untouched.
 
+The exact [Wolf Launcher 0.1.9-Wolf APK](assets/WolfLauncher_0.1.9-Wolf.apk)
+is included for direct download. Its SHA-256 is
+`d03ed56bb5564aa5b3e668831484917616510b02db4dde6a813d49a352054d05`.
+The deployment script still fetches and independently verifies the same pinned
+artifact from the original archive.
+
 See the [package lists](manifests/) and [recorded deployment
 state](docs/DEPLOYED-STATE.md) for exact scope and verification limits.
 

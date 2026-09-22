@@ -14,6 +14,18 @@ reject() {
 
 find "$root" -type f ! -path '*/.git/*' -print > "$scan_list"
 while IFS= read -r file; do
+  if [ "$file" = "$root/assets/WolfLauncher_0.1.9-Wolf.apk" ]; then
+    bytes=$(wc -c < "$file" | tr -d '[:space:]')
+    if command -v sha256sum >/dev/null 2>&1; then
+      digest=$(sha256sum "$file" | awk '{print $1}')
+    else
+      digest=$(shasum -a 256 "$file" | awk '{print $1}')
+    fi
+    if [ "$bytes" != 3272501 ] || [ "$digest" != d03ed56bb5564aa5b3e668831484917616510b02db4dde6a813d49a352054d05 ]; then
+      reject "$file" 'Wolf Launcher APK differs from the pinned artifact'
+    fi
+    continue
+  fi
   case "$file" in
     *.apk|*.apks|*.img|*.bin|*.mbn|*.zip) reject "$file" 'binary artifact or partition image' ;;
   esac

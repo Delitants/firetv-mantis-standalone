@@ -1,4 +1,5 @@
 .DS_Store
 *.apk
+!assets/WolfLauncher_0.1.9-Wolf.apk
 settings-tile/build/
 settings-tile/dist/

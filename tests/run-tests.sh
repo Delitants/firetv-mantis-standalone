@@ -1681,5 +1681,6 @@ cmp "$ORIGINAL_REMOVE" "$MANIFEST_REMOVE" >/dev/null || fail 'test run changed c
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 python3 -B "$ROOT/tests/test-atomic-rename.py"
 sh "$ROOT/tests/test-deploy-static.sh"
+sh "$ROOT/tests/test-bundled-wolf.sh"
 
 printf '%s\n' 'PASS: target gate tests'

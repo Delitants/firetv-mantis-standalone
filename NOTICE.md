@@ -7,7 +7,9 @@ by Amazon.
 Wolf Launcher is a third-party artifact. The controller verifies the pinned
 artifact's byte size, SHA-256, package metadata, signature schemes, and signer
 certificate continuity. Those checks establish artifact identity only; they do
-not establish publisher authenticity, license rights, or malware safety.
+not establish publisher authenticity, license rights, or malware safety. The
+pinned 0.1.9-Wolf APK is redistributed under `assets/`; this repository's MIT
+license does not apply to that third-party APK.
 
 Aurora Store is a third-party artifact downloaded from Aurora OSS. The
 deployment verifies its pinned byte size, SHA-256, APK metadata, signature
