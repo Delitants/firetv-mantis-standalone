@@ -44,6 +44,11 @@ from the parsed baseline. Missing, ambiguous, malformed, foreign-action, and
 foreign-component output is rejected, and Settings route drift is exercised
 after disable, after rollback enable, and during fresh restore.
 
+The fake ADB can deliberately drain all inherited stdin. Under that mode the
+tests require all ten Settings routes, both fixture manifest packages, reverse
+rollback, and fresh restore ledger entries to be processed. This exercises the
+controller's `/dev/null` stdin boundary for primary and network ADB processes.
+
 The smoke verifier parses only the current-focus field, waits in bounded steps
 for asynchronous Launcher activity changes, and cleans its temporary hierarchy
 file before backing out to Home on every failed route. Stock-menu events are

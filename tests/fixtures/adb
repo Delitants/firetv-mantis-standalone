@@ -4,6 +4,10 @@ if [ -n "${FAKE_ADB_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
 fi
 
+if [ "${FAKE_ADB_DRAIN_STDIN:-no}" = yes ]; then
+  while IFS= read -r ignored_stdin_line; do :; done
+fi
+
 if [ "$1" != "-s" ] || [ -z "${2:-}" ]; then
   printf '%s\n' 'fake adb requires -s SERIAL' >&2
   exit 64

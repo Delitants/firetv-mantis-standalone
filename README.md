@@ -30,3 +30,7 @@ and it verifies every transition with the enabled (`-e`) and disabled (`-d`)
 package inventories. Restore attempts and verified results are durably journaled
 before the successful-disable ledger is changed, so an interrupted inverse can
 be reconciled without blindly repeating `pm enable`.
+
+Every ADB client process receives `/dev/null` as stdin. This keeps the external
+client from consuming controller-owned route, manifest, or recovery-ledger
+loops; none of this controller's ADB commands accept an input payload.

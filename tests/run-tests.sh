@@ -31,6 +31,7 @@ unset FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES FAKE_HOME FAKE_BLUETOOTH_ON FA
 unset FAKE_ADB_ENABLED FAKE_DEVELOPMENT_SETTINGS_ENABLED FAKE_PERSIST_USB_CONFIG FAKE_SYS_USB_CONFIG
 unset FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT FAKE_ADBD_PID FAKE_INIT_SVC_ADBD FAKE_ALWAYS_ON_VPN_APP
 unset FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_PACKAGE_STATE FAKE_DISABLE_MODE FAKE_DISABLE_FAIL_PACKAGE
+unset FAKE_ADB_DRAIN_STDIN
 unset FAKE_AFTER_DISABLE_ADB_ENABLED FAKE_DISABLE_RESULT FAKE_AFTER_DISABLE_PERSIST_ADB_TCP_PORT
 unset FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT FAKE_ENABLE_FAIL_PACKAGE
 unset FAKE_ENABLE_INTERRUPT_MARKER FAKE_ENABLE_ERROR_AFTER_STATE_PACKAGE FAKE_AFTER_ENABLE_BLUETOOTH_ON
@@ -182,6 +183,7 @@ reset_wolf_fixture() {
 
 prepare_package_state() {
   unset FAKE_BLUETOOTH_ON FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES
+  unset FAKE_ADB_DRAIN_STDIN
   unset FAKE_ADB_ENABLED FAKE_DEVELOPMENT_SETTINGS_ENABLED FAKE_INIT_SVC_ADBD FAKE_ADBD_PID
   unset FAKE_PERSIST_USB_CONFIG FAKE_SYS_USB_CONFIG FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT
   unset FAKE_ADB_STATE FAKE_ALWAYS_ON_VPN_APP FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_TUN0
@@ -308,6 +310,27 @@ assert_contains "$BASELINE_CONTENT" 'service.adb.tcp.port=5555'
 assert_contains "$BASELINE_CONTENT" 'init.svc.adbd=running'
 assert_contains "$BASELINE_CONTENT" 'always_on_vpn_app=com.wireguard.android'
 assert_contains "$BASELINE_CONTENT" 'tun0=present'
+
+# Break caught: the real adb client may consume inherited stdin. Every ADB
+# process must see /dev/null so route pipelines cannot be truncated.
+DRAIN_STDIN_AUDIT_DIR="$TEST_TMP/audit-draining-adb"
+FAKE_ADB_DRAIN_STDIN=yes run_tool --output "$DRAIN_STDIN_AUDIT_DIR" audit ||
+  fail "audit allowed adb to drain its ten-route pipeline: $ERR"
+[ "$(wc -l < "$DRAIN_STDIN_AUDIT_DIR/settings-route-resolvers.txt" | tr -d ' ')" = 10 ] ||
+  fail 'audit did not capture all ten Settings routes with stdin-draining adb'
+VERIFY_BASELINE=$DRAIN_STDIN_AUDIT_DIR
+prepare_package_state
+set_wolf_ready
+FAKE_ADB_DRAIN_STDIN=yes run_verify ||
+  fail "verify failed with stdin-draining adb: $ERR"
+[ "$(awk '/shell cmd package resolve-activity --brief -a (android.settings|com.amazon.device.settings)/ { count++ } END { print count + 0 }' "$FAKE_ADB_LOG")" = 10 ] ||
+  fail 'verify did not check all ten Settings routes with stdin-draining adb'
+FAKE_ADB_DRAIN_STDIN=yes run_verify_settings ||
+  fail "verify-settings failed with stdin-draining adb: $ERR"
+[ "$(awk '/shell cmd package resolve-activity --brief -a (android.settings|com.amazon.device.settings)/ { count++ } END { print count + 0 }' "$FAKE_ADB_LOG")" = 10 ] ||
+  fail 'verify-settings did not check all ten routes with stdin-draining adb'
+unset FAKE_ADB_DRAIN_STDIN
+VERIFY_BASELINE=$AUDIT_DIR
 
 # Break caught: real Fire OS Settings resolvers emit strict metadata followed
 # by the component. Audit must keep raw evidence separately while the guarded,
@@ -578,6 +601,40 @@ assert_contains "$OUT" 'DISABLE=com.amazon.android.marketplace RESTORE=pm enable
 assert_contains "$OUT" 'DISABLE=com.amazon.bueller.music RESTORE=pm enable --user 0 com.amazon.bueller.music'
 assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
+
+# Break caught: package manifests and restore ledgers are controller input, not
+# adb input. A draining adb must not truncate apply, rollback, or restore loops.
+PACKAGE_DRAIN_STDIN_DIR="$TEST_TMP/apply-draining-adb"
+prepare_package_state
+set_wolf_ready
+FAKE_ADB_DRAIN_STDIN=yes \
+  run_tool --output "$PACKAGE_DRAIN_STDIN_DIR" --yes apply ||
+  fail "apply allowed adb to drain its package manifest: $ERR"
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm disable-user --user 0 com.amazon.android.marketplace'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm disable-user --user 0 com.amazon.bueller.music'
+[ "$(wc -l < "$PACKAGE_DRAIN_STDIN_DIR/disabled-successfully.txt" | tr -d ' ')" = 2 ] ||
+  fail 'apply did not record both fixture packages with stdin-draining adb'
+FAKE_ADB_DRAIN_STDIN=yes run_tool restore "$PACKAGE_DRAIN_STDIN_DIR" ||
+  fail "restore allowed adb to drain its recovery ledger: $ERR"
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.bueller.music'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
+[ ! -s "$PACKAGE_DRAIN_STDIN_DIR/disabled-successfully.txt" ] ||
+  fail 'restore left a package in the ledger with stdin-draining adb'
+unset FAKE_ADB_DRAIN_STDIN
+
+PACKAGE_DRAIN_ROLLBACK_DIR="$TEST_TMP/rollback-draining-adb"
+prepare_package_state
+set_wolf_ready
+FAKE_ADB_DRAIN_STDIN=yes \
+FAKE_AFTER_DISABLE_ADB_ENABLED=0 \
+FAKE_AFTER_DISABLE_ADB_ENABLED_AFTER_COUNT=2 \
+  run_tool --output "$PACKAGE_DRAIN_ROLLBACK_DIR" --yes apply &&
+  fail 'apply accepted the forced second-package guard failure'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.bueller.music'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm enable --user 0 com.amazon.android.marketplace'
+[ ! -s "$PACKAGE_DRAIN_ROLLBACK_DIR/disabled-successfully.txt" ] ||
+  fail 'rollback left a package in the ledger with stdin-draining adb'
+unset FAKE_ADB_DRAIN_STDIN
 
 # Break caught: apply and fresh restore must carry the exact verbose HOME
 # component through the checksummed baseline and compare it after every action.

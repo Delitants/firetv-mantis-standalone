@@ -98,13 +98,13 @@ fi
 [ -n "$SERIAL" ] || { printf '%s\n' '--serial is required for device commands' >&2; exit 64; }
 
 adb_cmd() {
-  "$ADB" -s "$SERIAL" "$@"
+  "$ADB" -s "$SERIAL" "$@" < /dev/null
 }
 
 adb_shell() {
   adb_cmd shell "$@"
 }
-network_adb_cmd() { "$ADB" -s "${NETWORK_SERIAL:-$SERIAL}" "$@"; }
+network_adb_cmd() { "$ADB" -s "${NETWORK_SERIAL:-$SERIAL}" "$@" < /dev/null; }
 network_read_prop() { network_adb_cmd shell getprop "$1"; }
 require_network_target() {
   for pair in 'ro.product.manufacturer:Amazon' 'ro.product.model:AFTMM' 'ro.product.device:mantis' 'ro.build.id:NS6711' 'ro.build.version.incremental:0011644900484'; do
