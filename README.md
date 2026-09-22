@@ -18,7 +18,8 @@ The Settings smoke test proves the build's `settings.v2` HUD and its enabled,
 focusable, clickable Settings tile once. Because tile selection may resume a
 known stock subpage, its post-Select focus must match the exact Settings route
 table or stock root. Every permission-protected route is then navigated from a
-fresh, explicit launch of the exact stock Settings root.
+fresh, explicit `CLEAR_TOP` launch of the exact stock Settings root so an old
+Settings task cannot silently resume its last subpage.
 HUD entry observes exact focus after key 176 and falls back to long-press Home
 when that key reports success without opening the HUD.
 Fire OS may return success for a protected action without leaving Home; that

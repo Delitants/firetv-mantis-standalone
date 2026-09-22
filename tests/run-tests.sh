@@ -39,6 +39,7 @@ unset FAKE_HOME_RESOLVER FAKE_HOME_RESOLVER_VERBOSE FAKE_AFTER_DISABLE_HOME_RESO
 unset FAKE_SETTINGS_ROUTES_VERBOSE FAKE_AFTER_DISABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_DISABLE_SETTINGS_ROUTE_VALUE
 unset FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE
 unset FAKE_HUD_SETTINGS_TILE FAKE_HUD_POST_SELECT_FOCUS FAKE_ROOT_START_RESULT FAKE_ROOT_FOCUS
+unset FAKE_ROOT_REQUIRES_CLEAR_TOP FAKE_ROOT_IGNORE_CLEAR_TOP
 unset FAKE_STOCK_MENU_STATUS0_ACTION FAKE_STOCK_MENU_WRONG_ERROR_ACTION
 unset FAKE_KEY176_NOOP FAKE_LONGPRESS3_NOOP
 unset FAKE_CMD_PACKAGE_HELP FAKE_PM_HELP FAKE_PM_HELP_STATUS FAKE_PACKAGES_ACTIVE FAKE_PACKAGES_UNINSTALLED FAKE_PACKAGES_DISABLED
@@ -193,6 +194,7 @@ prepare_package_state() {
   unset FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION FAKE_UI_STATE
   unset FAKE_CURRENT_FOCUS FAKE_WOLF_FOCUS_DELAY FAKE_WOLF_FOCUS_DELAY_FILE FAKE_NETWORK_MODEL FAKE_NETWORK_SERIAL FAKE_SERIALNO
   unset FAKE_HUD_SETTINGS_TILE FAKE_HUD_POST_SELECT_FOCUS FAKE_ROOT_START_RESULT FAKE_ROOT_FOCUS
+  unset FAKE_ROOT_REQUIRES_CLEAR_TOP FAKE_ROOT_IGNORE_CLEAR_TOP
   unset FAKE_STOCK_MENU_STATUS0_ACTION FAKE_STOCK_MENU_WRONG_ERROR_ACTION
   unset FAKE_KEY176_NOOP FAKE_LONGPRESS3_NOOP
   unset FAKE_WOLF_STATE FAKE_WOLF_INSTALLED_VERSION_CODE FAKE_WOLF_INSTALLED_VERSION_NAME
@@ -1285,7 +1287,26 @@ assert_contains "$OUT" 'SETTINGS_ROUTES=PASS'
 assert_contains "$OUT" 'DEVELOPER_OPTIONS=PASS'
 assert_contains "$OUT" 'VERIFY_SETTINGS=PASS'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent 176'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+
+# Break caught: bringing an existing Settings task forward may resume its last
+# Preferences subpage. The exact CLEAR_TOP flag must produce and focus the root.
+prepare_package_state
+set_wolf_ready
+FAKE_ROOT_REQUIRES_CLEAR_TOP=1 \
+  run_verify_settings || fail "verify-settings did not clear a resumed Settings task to root: $ERR"
+assert_contains "$OUT" 'UI_SMOKE=PASS'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+
+# Status zero and Starting output are insufficient when the platform ignores
+# CLEAR_TOP and keeps the resumed subpage focused.
+prepare_package_state
+set_wolf_ready
+if FAKE_ROOT_REQUIRES_CLEAR_TOP=1 FAKE_ROOT_IGNORE_CLEAR_TOP=1 run_verify_settings; then
+  fail 'verify-settings accepted an ignored CLEAR_TOP root launch'
+fi
+assert_contains "$ERR" 'Settings intermediate focus expected=com.amazon.tv.launcher/.ui.MainSettingsActivity'
+assert_not_contains "$OUT" 'UI_SMOKE=PASS'
 
 # Break caught: keyevent 176 can return success without opening the HUD. The
 # controller must silently observe that miss, fall back to long-press Home, and
@@ -1324,7 +1345,7 @@ FAKE_STOCK_MENU_STATUS0_ACTION=android.settings.SETTINGS \
   run_verify_settings || fail "verify-settings rejected a status-zero stock-menu no-op: $ERR"
 assert_contains "$OUT" 'UI_SMOKE=PASS'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -a android.settings.SETTINGS'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
 # A nonzero stock-menu launch remains acceptable only for the exact Amazon
 # launcher permission denial, never an arbitrary start failure.
@@ -1343,7 +1364,7 @@ set_wolf_ready
 FAKE_HUD_POST_SELECT_FOCUS=com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity \
   run_verify_settings || fail "verify-settings rejected a resumed stock HUD subpage: $ERR"
 assert_contains "$OUT" 'UI_SMOKE=PASS'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
 # Break caught: Select must leave the HUD for a specifically known stock
 # Settings destination; unchanged HUD or an unknown settings.v2 activity is

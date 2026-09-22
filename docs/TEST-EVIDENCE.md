@@ -40,6 +40,9 @@ The stock-menu fixture also models the observed status-zero action start that
 leaves Home focused. Coverage proves this no-op still succeeds only through the
 separately launched and verified stock root, while a nonzero result with any
 error other than the exact Amazon launcher permission denial is rejected.
+Task-history coverage makes an unflagged root launch resume Preferences and
+requires the exact `0x04000000` `CLEAR_TOP` flag to restore MainSettingsActivity
+focus. A simulated platform that ignores the flag still fails the focus gate.
 
 Package tests use the enabled inventory as the operative set and require each
 successful candidate to move into the disabled inventory. They cover missing

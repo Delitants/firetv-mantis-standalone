@@ -384,14 +384,23 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
     if [ "${2:-}" = start ] && [ "${3:-}" = -n ] && [ "${4:-}" = com.wolf.firelauncher/.screens.launcher.LauncherActivity ]; then
       write_ui_state wolf
       value='Starting: Intent { cmp=com.wolf.firelauncher/.screens.launcher.LauncherActivity }'
-    elif [ "${2:-}" = start ] && [ "${3:-}" = -n ] && [ "${4:-}" = com.amazon.tv.launcher/.ui.MainSettingsActivity ]; then
+    elif [ "${2:-}" = start ] && {
+      { [ "${3:-}" = -n ] && [ "${4:-}" = com.amazon.tv.launcher/.ui.MainSettingsActivity ]; } ||
+      { [ "${3:-}" = -f ] && [ "${4:-}" = 0x04000000 ] && [ "${5:-}" = -n ] && [ "${6:-}" = com.amazon.tv.launcher/.ui.MainSettingsActivity ]; }
+    }; then
       if [ "${FAKE_ROOT_START_RESULT:-success}" = failure ]; then
         printf '%s\n' 'Error: Activity not started' >&2
         exit 1
       fi
       state=$(read_ui_state 2>/dev/null || true)
       case "$state" in protected:*) route=${state#protected:} ;; *) route=android.settings.SETTINGS ;; esac
-      write_ui_state "root:$route"
+      clear_top=0; [ "${3:-}" != -f ] || clear_top=1
+      if [ "${FAKE_ROOT_REQUIRES_CLEAR_TOP:-0}" = 1 ] &&
+        { [ "$clear_top" -ne 1 ] || [ "${FAKE_ROOT_IGNORE_CLEAR_TOP:-0}" = 1 ]; }; then
+        write_ui_state "root-resumed:$route"
+      else
+        write_ui_state "root:$route"
+      fi
       value='Starting: Intent { cmp=com.amazon.tv.launcher/.ui.MainSettingsActivity }'
     elif [ "${2:-}" = start ] && [ "${3:-}" = -a ] && [ -n "${4:-}" ]; then
       action=${4}
@@ -462,6 +471,7 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
         hud|hud-sequence:*) action=HudActivity ;;
         hud-selected) focus=${FAKE_HUD_POST_SELECT_FOCUS:-com.amazon.tv.launcher/.ui.MainSettingsActivity}; action=explicit ;;
         root:*) action=MainSettingsActivity ;;
+        root-resumed:*) action=PreferencesActivity ;;
         root-sequence:*|protected:*) action=wrong ;;
       esac
       case "$state" in
