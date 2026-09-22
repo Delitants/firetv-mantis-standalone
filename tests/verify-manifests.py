@@ -28,6 +28,7 @@ MANDATORY_CORE = (
     "com.amazon.ssdpservice",
     "com.amazon.tcomm",
     "com.amazon.tcomm.client",
+    "com.amazon.tv.csapp",
     "com.amazon.tv.devicecontrol",
     "com.amazon.tv.devicecontrolsettings",
     "com.amazon.tv.ime",

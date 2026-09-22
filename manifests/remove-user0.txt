@@ -20,7 +20,6 @@ com.amazon.systemnotices
 com.amazon.tahoe
 com.amazon.tigris
 com.amazon.tmm.tutorial
-com.amazon.tv.csapp
 com.amazon.tv.legal.notices
 com.amazon.tv.legalresources
 com.amazon.tv.livetv

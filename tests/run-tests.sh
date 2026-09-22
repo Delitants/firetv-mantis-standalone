@@ -219,9 +219,11 @@ prepare_package_state() {
   unset FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE
 }
 
-[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 31 ] || fail 'remove-user0.txt must contain exactly 31 packages'
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 30 ] || fail 'remove-user0.txt must contain exactly 30 packages'
 assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.ftvads.deeplinking'
 assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.ftvads.deeplinking'
+assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.tv.csapp'
+assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.tv.csapp'
 
 set_wolf_ready() {
   export FAKE_WOLF_INSTALLED_VERSION_CODE=11900120
@@ -611,6 +613,7 @@ assert_contains "$OUT" 'DISABLE=com.amazon.android.marketplace RESTORE=pm enable
 assert_contains "$OUT" 'DISABLE=com.amazon.bueller.music RESTORE=pm enable --user 0 com.amazon.bueller.music'
 assert_contains "$OUT" 'PACKAGE_OPERATION=pm disable-user --user 0'
 assert_not_contains "$OUT" 'com.amazon.ftvads.deeplinking'
+assert_not_contains "$OUT" 'com.amazon.tv.csapp'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
 
 # Break caught: package manifests and restore ledgers are controller input, not
@@ -624,6 +627,7 @@ FAKE_ADB_DRAIN_STDIN=yes \
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm disable-user --user 0 com.amazon.android.marketplace'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell pm disable-user --user 0 com.amazon.bueller.music'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0 com.amazon.ftvads.deeplinking'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0 com.amazon.tv.csapp'
 [ "$(wc -l < "$PACKAGE_DRAIN_STDIN_DIR/disabled-successfully.txt" | tr -d ' ')" = 2 ] ||
   fail 'apply did not record both fixture packages with stdin-draining adb'
 FAKE_ADB_DRAIN_STDIN=yes run_tool restore "$PACKAGE_DRAIN_STDIN_DIR" ||
@@ -1643,7 +1647,7 @@ done
 clear_wolf_ready
 unset FAKE_PACKAGE_STATE FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION
 
-[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 31 ] || fail 'test run changed the exact 31-package candidate manifest'
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 30 ] || fail 'test run changed the exact 30-package candidate manifest'
 cmp "$ORIGINAL_REMOVE" "$MANIFEST_REMOVE" >/dev/null || fail 'test run changed candidate manifest content'
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 python3 -B "$ROOT/tests/test-atomic-rename.py"
