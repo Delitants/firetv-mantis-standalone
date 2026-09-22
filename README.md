@@ -1,81 +1,75 @@
-# Fire TV Mantis Standalone
+# Fire TV Stick 4K (Mantis): temporary root and debloat
 
-An intentionally narrow, recovery-first controller for the exact Amazon
-`mantis/AFTMM` Fire OS target documented in `docs/MODEL-SAFETY.md`. It audits,
-plans reversible per-user package disables, verifies a pinned Wolf Launcher,
-and refuses operations outside that boundary.
+This project is for the **Fire TV Stick 4K `mantis/AFTMM` only**—not the 4K
+Max. The scripts require Fire OS build `NS6711`, incremental
+`0011644900484`, and the exact fingerprint and kernel listed in
+[model safety](docs/MODEL-SAFETY.md). They stop on a mismatch. Do not try the
+root patch or package list on another build.
 
-The repository includes the exact-build temporary-root port as a patch against
-its unlicensed upstream base, plus a guarded end-to-end deployment script. It
-does not include a compiled exploit, APK, firmware/kernel image, device backup,
-connection data, or credential. See `exploit/README.md` for provenance and
-`docs/DEPLOYED-STATE.md` for the verified result and recovery boundary.
+The workflow uses **temporary, exec-only root**. It does not install `su` or
+provide root after a reboot, and permits one exploit attempt per boot. Package
+changes persist, so read the
+[recovery guide](docs/RECOVERY.md) and keep its backup/journal files before
+running anything.
 
-The complete workflow is `scripts/deploy-mantis.sh`. It requires explicit USB
-and network ADB serials, a locally built root binary, an output directory, and
-`--yes`. It verifies the exact model/build over both transports before any
-mutation, installs pinned Wolf Launcher and Aurora Store APKs after signature
-checks, performs the 30-package reversible user-0 debloat, runs the exec-only
-root stage for five exact packages plus the two stock Home components, reboots,
-repeats full QA, and captures the final Wolf Home screenshot. Run it only after
-reading `docs/RECOVERY.md`.
+## What it does
 
-This build does not provide device-side SHA-256. The deployer therefore pulls
-each staged root input back over the selected ADB transport and compares its
-SHA-256 on the host. APK, profile, and exploit artifact SHA-256 gates remain
-unchanged. The root action journal uses the observed device `md5sum` solely as
-a tamper/corruption check for its restorative state file.
+- Installs Wolf Launcher `0.1.9-Wolf` and Aurora Store `4.8.4` after checking
+  their APKs.
+- Reversibly disables 30 listed packages for user 0. The root stage also
+  disables OTA, Appstore, the visible IMDb app, and stock Home components.
+  System APKs are not deleted.
+- Makes Wolf the Home launcher while keeping stock Settings, Wi-Fi, Bluetooth,
+  remote-control services, and USB/network ADB available.
+- Leaves TiviMate, WireGuard, and Sweet TV untouched.
 
-Start with an audit, read the generated restore script, run `--baseline AUDIT_DIRECTORY verify` (and `--network-serial SERIAL:5555` before it when the primary serial is USB), and use
-`verify-settings` before any package action. The latter only opens stock
-Settings routes and backs out; it never writes a setting. See
-`docs/RECOVERY.md` before using `apply` or `restore`.
+See the [package lists](manifests/) and [recorded deployment
+state](docs/DEPLOYED-STATE.md) for exact scope and verification limits.
 
-The Settings smoke test proves the build's `settings.v2` HUD and its enabled,
-focusable, clickable Settings tile once. Because tile selection may resume a
-known stock subpage, its post-Select focus must match the exact Settings route
-table or stock root. Every permission-protected route is then navigated from a
-fresh, explicit `CLEAR_TOP` launch of the exact stock Settings root so an old
-Settings task cannot silently resume its last subpage.
-HUD entry observes exact focus after key 176 and falls back to long-press Home
-when that key reports success without opening the HUD.
-Fire OS may return success for a protected action without leaving Home; that
-result is not trusted and still must pass the explicit root and route checks.
+## 1. Build the temporary-root tool
 
-Fire OS may print a diagnostic metadata line before a resolved component.
-Audit preserves those raw Settings resolver lines separately and stores a
-strictly parsed, checksummed ten-route component map. Package guards and fresh
-restore load that map and require every route to remain exactly baseline-bound.
+On a host with Android NDK r30, clone this repository and the pinned GhostLock
+source side by side:
 
-The project is English and locale-neutral. Locale changes are outside this
-controller. On the recorded deployment, the Android framework locale was set
-separately to `uk-UA`; Amazon Settings remains partly English because its APKs
-do not contain Ukrainian resources.
+```sh
+git clone https://github.com/Delitants/firetv-mantis-standalone.git
+git clone --branch 4.4 https://github.com/R0rt1z2/GhostLock.git
+cd GhostLock
+git checkout 2e73c256ff0205de6d08ea0996d15f4700e23fdc
+git am ../firetv-mantis-standalone/exploit/patches/0001-feat-add-exact-Mantis-exec-only-root-port.patch
+make NDK=/absolute/path/to/android-ndk-r30 API=24
+```
 
-An optional, permission-free Settings tile source is in
-[`settings-tile/`](settings-tile/README.md). It opens the exported stock
-`com.amazon.tv.launcher/.ui.MainSettingsActivity` while the stock Home
-component stays disabled. The app label is English by default and Ukrainian
-when the device uses that locale. The locally signed APK and signing key are
-not published.
+The result is `GhostLock/build/ghostlock_root`. Read the
+[exploit notes](exploit/README.md) and patched `README-MANTIS.md` before using
+it. The upstream source is not redistributed here.
 
-The package operation is `pm disable-user --user 0`; recovery is
-`pm enable --user 0`. Apps remain installed in the system image. The
-controller will not apply unless `pm help` proves both exact command forms,
-and it verifies every transition with the enabled (`-e`) and disabled (`-d`)
-package inventories. Restore attempts and verified results are durably journaled
-before the successful-disable ledger is changed, so an interrupted inverse can
-be reconciled without blindly repeating `pm enable`.
+## 2. Run the guarded deployment
 
-On the exact NS6711 build, `com.amazon.ftvads.deeplinking`,
-`com.amazon.tv.csapp`, and `com.amazon.venezia` reject the unprivileged
-`disable-user` operation. The first two remain mandatory core-preserve entries.
-Amazon Appstore (`com.amazon.venezia`) and the visible IMDb application
-(`com.imdb.livingroom.firetv`) are instead exact, restorative root-stage
-disables declared in `disable-root-packages.txt`. The separate legacy IMDb
-package `com.amazon.imdb.tv.android.app` remains in the ordinary 30-package
-user-0 manifest.
+You need authorized **USB and network ADB connections to the same stick**, plus
+`adb`, `curl`, `aapt`, and `apksigner` on the host. From the
+`firetv-mantis-standalone` directory, replace the placeholders below:
 
-Every ADB client process receives `/dev/null` as stdin. This keeps the external
-client from consuming controller-owned route, manifest, or recovery-ledger
-loops; none of this controller's ADB commands accept an input payload.
+```sh
+scripts/deploy-mantis.sh \
+  --serial USB_SERIAL \
+  --network-serial DEVICE_IP:5555 \
+  --root-binary ../GhostLock/build/ghostlock_root \
+  --output /path/to/private-backup \
+  --yes
+```
+
+The script checks the exact device and both ADB connections before changing
+packages. It creates an audit and recovery backup, deploys the apps and
+debloat, reboots, then checks Home, Settings, protected apps, Wi-Fi, Bluetooth,
+and ADB again. **Keep the private output directory:** restoring protected
+changes requires its root-action journal and another temporary-root session.
+See [recovery](docs/RECOVERY.md) if any check fails.
+
+## Optional Settings tile
+
+The deployment script does **not** install the separate Settings tile. Its
+[source and build/sign instructions](settings-tile/README.md) are provided for
+Wolf Launcher users who want a direct tile for the stock Fire TV Settings
+screen. The default label is English; Ukrainian is an optional locale
+translation. No signed APK or signing key is published here.
