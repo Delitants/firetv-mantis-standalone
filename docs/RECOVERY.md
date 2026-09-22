@@ -62,10 +62,12 @@ prove both syntaxes. `apply` disables packages for user 0; it does not uninstall
 their APKs or modify the system image. The checksummed backup records only
 candidates whose transition to the disabled inventory was verified. Candidates
 that were already disabled are skipped and are not later enabled by restore.
-Do not manually disable `com.amazon.ftvads.deeplinking`,
-`com.amazon.tv.csapp`, or `com.amazon.venezia`: this exact NS6711 build marks all
-three protected, and the controller requires them to remain enabled through the
-core-preservation guard.
+Do not manually disable `com.amazon.ftvads.deeplinking` or
+`com.amazon.tv.csapp`: this exact NS6711 build marks both protected, and the
+controller requires them to remain enabled through the core-preservation guard.
+Appstore (`com.amazon.venezia`) also rejects the shell-stage operation, so it
+and `com.imdb.livingroom.firetv` are changed only by the guarded root
+stage and recorded in `root-actions.journal`.
 
 If the screen is black or the launcher path is unhealthy, stop package actions.
 Keep the stock remote path, return to stock Home/Settings, and restore the
@@ -91,8 +93,20 @@ runs the preserved-app, Bluetooth, Whisper/Home/Settings, VPN, and USB/network
 ADB guards before removing that package from the checksummed ledger. A failed
 guard retains the ledger entry and prevents `RESTORE=PASS`.
 
+The protected Home components and five root-only packages (three OTA packages,
+Appstore, and the visible IMDb application) require a fresh temporary root
+session to restore. Stage `scripts/device-root-restore.sh` and the original
+`root-actions.journal` plus `root-actions.journal.md5` together as the mandatory
+`--exec` operation for the exact-build exploit. The restore script verifies the
+journal with the build's observed `/system/bin/md5sum`, then enables only
+entries that the journal records as changed by that deployment. Verify that it reports
+`ROOT_RESTORE=PASS` before rebooting. Restore the ordinary 30-package user-0
+ledger separately with `mantis-tool.sh restore`; do not treat a root restore as
+a substitute for that checksummed inverse.
+
 Do not reboot before pre-reboot verification and a rollback rehearsal. Locale
-is never changed by this controller. If a preferred language is offered, use
-only stock Settings > Language, record the original locale first, and return
-through the same stock UI to roll back. Ukrainian was not offered in the
-observed stock list, so `UKRAINIAN_LOCALE=UNAVAILABLE`.
+is never changed by this controller. If a locale is changed separately, record
+the original value and verify the active Android configuration after reboot.
+The completed deployment set the framework locale to `uk-UA` outside this
+repository; Fire OS Settings remains partly English because the Amazon APKs do
+not provide Ukrainian resources.

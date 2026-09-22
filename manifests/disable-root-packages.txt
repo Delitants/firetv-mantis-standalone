@@ -1,0 +1,5 @@
+com.amazon.device.software.ota
+com.amazon.device.software.ota.override
+com.imdb.livingroom.firetv
+com.amazon.tv.forcedotaupdater.v2
+com.amazon.venezia

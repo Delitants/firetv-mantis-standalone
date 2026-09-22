@@ -39,7 +39,6 @@ MANDATORY_CORE = (
     "com.amazon.tv.launcher",
     "com.amazon.tv.routing",
     "com.amazon.uxcontrollerservice",
-    "com.amazon.venezia",
     "com.amazon.vizzini",
     "com.amazon.vizzini.ftvcds",
     "com.amazon.webview",
@@ -61,9 +60,18 @@ MANDATORY_CORE = (
 
 MANDATORY_USER_APPS = (
     "ar.tvplayer.tv",
+    "com.aurora.store",
     "com.wireguard.android",
     "tv.sweet.tvplayer",
     "com.wolf.firelauncher",
+)
+
+MANDATORY_ROOT_PACKAGES = (
+    "com.amazon.device.software.ota",
+    "com.amazon.device.software.ota.override",
+    "com.imdb.livingroom.firetv",
+    "com.amazon.tv.forcedotaupdater.v2",
+    "com.amazon.venezia",
 )
 
 
@@ -73,6 +81,7 @@ class ValidationError(Exception):
 
 PACKAGE_NAME = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 MANIFEST_NAMES = (
+    "disable-root-packages.txt",
     "preserve-core.txt",
     "preserve-user-apps.txt",
     "remove-user0.txt",
@@ -105,11 +114,14 @@ def validate_manifests(directory):
     core = set(manifests["preserve-core.txt"])
     user_apps = set(manifests["preserve-user-apps.txt"])
     removal = set(manifests["remove-user0.txt"])
+    root_packages = set(manifests["disable-root-packages.txt"])
     missing_core = set(MANDATORY_CORE) - core
     if missing_core:
         raise ValidationError(f"missing mandatory core package: {sorted(missing_core)[0]}")
     if user_apps != set(MANDATORY_USER_APPS):
         raise ValidationError("preserve-user-apps.txt must contain exactly the protected user apps")
+    if root_packages != set(MANDATORY_ROOT_PACKAGES):
+        raise ValidationError("disable-root-packages.txt must contain exactly the root-only packages")
     for package in removal:
         lowered = package.lower()
         if package in set(MANDATORY_USER_APPS) or package in set(MANDATORY_CORE):
@@ -123,8 +135,14 @@ def validate_manifests(directory):
     overlap = (core | user_apps) & removal
     if overlap:
         raise ValidationError(f"preserve/removal overlap: {sorted(overlap)[0]}")
+    root_removal_overlap = root_packages & removal
+    if root_removal_overlap:
+        raise ValidationError(f"root/removal overlap: {sorted(root_removal_overlap)[0]}")
+    root_preserve_overlap = (core | user_apps) & root_packages
+    if root_preserve_overlap:
+        raise ValidationError(f"root/preserve overlap: {sorted(root_preserve_overlap)[0]}")
 
-    return len(core) + len(user_apps), len(removal)
+    return len(core) + len(user_apps), len(removal), len(root_packages)
 
 
 def write_manifest(directory, name, packages):
@@ -132,6 +150,7 @@ def write_manifest(directory, name, packages):
 
 
 def positive_fixture(directory):
+    write_manifest(directory, "disable-root-packages.txt", MANDATORY_ROOT_PACKAGES)
     write_manifest(directory, "preserve-core.txt", MANDATORY_CORE)
     write_manifest(directory, "preserve-user-apps.txt", MANDATORY_USER_APPS)
     write_manifest(directory, "remove-user0.txt", ("com.amazon.bueller.music",))
@@ -152,7 +171,15 @@ def run_self_test():
         root = pathlib.Path(temporary)
 
         positive_fixture(root)
-        assert validate_manifests(root) == (len(MANDATORY_CORE) + len(MANDATORY_USER_APPS), 1)
+        assert validate_manifests(root) == (len(MANDATORY_CORE) + len(MANDATORY_USER_APPS), 1, len(MANDATORY_ROOT_PACKAGES))
+
+        write_manifest(root, "disable-root-packages.txt", MANDATORY_ROOT_PACKAGES[1:])
+        assert_rejected(root, "missing root-only package", "must contain exactly")
+        positive_fixture(root)
+
+        write_manifest(root, "disable-root-packages.txt", MANDATORY_ROOT_PACKAGES + ("com.amazon.extra",))
+        assert_rejected(root, "unexpected root-only package", "must contain exactly")
+        positive_fixture(root)
 
         write_manifest(root, "preserve-core.txt", MANDATORY_CORE[1:])
         assert_rejected(root, "missing mandatory core package", "missing mandatory core package")
@@ -173,6 +200,10 @@ def run_self_test():
         write_manifest(root, "preserve-core.txt", MANDATORY_CORE + ("com.amazon.optional.safe",))
         write_manifest(root, "remove-user0.txt", ("com.amazon.bueller.music", "com.amazon.optional.safe"))
         assert_rejected(root, "preserve and removal overlap", "preserve/removal overlap")
+        positive_fixture(root)
+
+        write_manifest(root, "remove-user0.txt", (MANDATORY_ROOT_PACKAGES[0],))
+        assert_rejected(root, "root and removal overlap", "root/removal overlap")
         positive_fixture(root)
 
         for package in MANDATORY_USER_APPS:
@@ -207,8 +238,8 @@ def main(argv):
     if len(argv) != 1:
         print("usage: verify-manifests.py [--self-test|MANIFEST_DIRECTORY]", file=sys.stderr)
         return 64
-    preserve, remove = validate_manifests(pathlib.Path(argv[0]))
-    print(f"MANIFESTS=PASS preserve={preserve} remove={remove}")
+    preserve, remove, root = validate_manifests(pathlib.Path(argv[0]))
+    print(f"MANIFESTS=PASS preserve={preserve} remove={remove} root={root}")
     return 0
 
 

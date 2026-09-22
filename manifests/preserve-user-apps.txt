@@ -1,4 +1,5 @@
 ar.tvplayer.tv
+com.aurora.store
 com.wireguard.android
 tv.sweet.tvplayer
 com.wolf.firelauncher

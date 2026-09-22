@@ -15,6 +15,7 @@ com.amazon.shoptv.client
 com.amazon.shoptv.firetv.client
 com.amazon.sneakpeek
 com.amazon.spotify.mediabrowserservice
+com.amazon.ssm
 com.amazon.stillwatching.activity
 com.amazon.systemnotices
 com.amazon.tahoe

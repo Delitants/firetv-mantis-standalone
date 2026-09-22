@@ -50,11 +50,16 @@ help syntax, already-disabled skips, silent no-effect rejection, interruption
 between disable and journal success, reverse restore, partial enable failure,
 interruption after enable but before ledger pruning, an enable that mutates
 state while returning nonzero, post-enable guard failure, checksum/tamper
-rejection, the exact 29-entry candidate manifest, and the 53-entry combined
-preservation set. `com.amazon.ftvads.deeplinking`, `com.amazon.tv.csapp`, and
-`com.amazon.venezia` are asserted present in core preservation, absent from
-candidates, absent from plan/apply disable calls, and individually enforced by
-the compact enabled-package guard.
+rejection, the exact 30-entry candidate manifest, the 53-entry combined
+preservation set, and the exact five-entry root-only package manifest.
+`com.amazon.ftvads.deeplinking` and `com.amazon.tv.csapp` are asserted present
+in core preservation and enforced by the compact enabled-package guard.
+`com.amazon.venezia` and `com.imdb.livingroom.firetv` are asserted absent
+from preservation and the ordinary candidate manifest, present in the
+root-only manifest, and paired with journal-controlled restore actions. The
+separate `com.amazon.imdb.tv.android.app` and `com.amazon.ssm` remain in the
+ordinary manifest. `com.amazon.vizzini.ftvcds` is asserted preserved and absent
+from both disable manifests.
 These are controller tests, not a claim that a live package transition or
 reboot passed. The same full suite is exercised with the local default `sh` and
 `/bin/dash`. Generated recovery is tested as a resumable controller entry point,
@@ -81,3 +86,13 @@ USB. The controller compares the two transports' nonempty device identities in
 memory without publishing them. Its checksummed baseline preserves the exact
 persisted ADB TCP-port state (including an empty value); only the runtime TCP
 listener is required to use port 5555.
+
+The completed live deployment is recorded separately in `DEPLOYED-STATE.md`.
+It distinguishes the controller's audit-time locale result from the later,
+out-of-repository framework locale change and records the post-reboot package,
+Home, Settings, ADB, Bluetooth, Wi-Fi, and Whisper acceptance results.
+
+Root-stage static coverage rejects device-side `sha256sum` assumptions. Staged
+root inputs are pulled back and host-SHA-256 compared; the device-side root
+journal and restore path use the observed `md5sum` command and the exact
+`root-actions.journal.md5` companion file.

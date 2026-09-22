@@ -6,6 +6,7 @@ TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mantis-tool-tests.XXXXXX")
 ROOT="$TEST_TMP/repository"
 cp -R "$SOURCE_ROOT" "$ROOT"
 MANIFEST_REMOVE="$ROOT/manifests/remove-user0.txt"
+MANIFEST_ROOT="$ROOT/manifests/disable-root-packages.txt"
 ORIGINAL_REMOVE=
 ORIGINAL_REMOVE="$TEST_TMP/remove-user0-original.txt"
 cp "$MANIFEST_REMOVE" "$ORIGINAL_REMOVE"
@@ -219,13 +220,19 @@ prepare_package_state() {
   unset FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE
 }
 
-[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 29 ] || fail 'remove-user0.txt must contain exactly 29 packages'
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 30 ] || fail 'remove-user0.txt must contain exactly 30 packages'
 assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.ftvads.deeplinking'
 assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.ftvads.deeplinking'
 assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.tv.csapp'
 assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.tv.csapp'
-assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.venezia'
+assert_not_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.venezia'
 assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.venezia'
+assert_contains "$(cat "$MANIFEST_ROOT")" 'com.amazon.venezia'
+assert_contains "$(cat "$MANIFEST_ROOT")" 'com.imdb.livingroom.firetv'
+assert_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.imdb.tv.android.app'
+assert_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.ssm'
+assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.vizzini.ftvcds'
+assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.vizzini.ftvcds'
 
 set_wolf_ready() {
   export FAKE_WOLF_INSTALLED_VERSION_CODE=11900120
@@ -702,9 +709,10 @@ fi
 assert_contains "$ERR" 'guard missing enabled package: com.amazon.tcomm'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
 
-# The three exact-build protected-package exceptions are operative compact
-# guard inputs, not merely validator metadata.
-for protected_platform_package in com.amazon.ftvads.deeplinking com.amazon.tv.csapp com.amazon.venezia; do
+# The exact-build packages retained by the ordinary shell-stage guard are
+# operative inputs, not merely validator metadata. Venezia moves to the
+# restorative root-only manifest instead.
+for protected_platform_package in com.amazon.ftvads.deeplinking com.amazon.tv.csapp; do
   prepare_package_state
   awk -v package="$protected_platform_package" '
     $1 == "active" && $2 == package { print "disabled", $2; next }
@@ -1668,9 +1676,10 @@ done
 clear_wolf_ready
 unset FAKE_PACKAGE_STATE FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION
 
-[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 29 ] || fail 'test run changed the exact 29-package candidate manifest'
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 30 ] || fail 'test run changed the exact 30-package candidate manifest'
 cmp "$ORIGINAL_REMOVE" "$MANIFEST_REMOVE" >/dev/null || fail 'test run changed candidate manifest content'
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 python3 -B "$ROOT/tests/test-atomic-rename.py"
+sh "$ROOT/tests/test-deploy-static.sh"
 
 printf '%s\n' 'PASS: target gate tests'

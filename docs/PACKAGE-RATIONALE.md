@@ -8,13 +8,21 @@ disablement.
 
 The preservation lists cover stock Settings and its dependencies, Home,
 Bluetooth/input, networking, DIAL/SSDP, Whisper services, package installation,
-and recovery support. The four protected user applications are preserved even
+and recovery support. The five protected user applications are preserved even
 when a generic package category might otherwise make them appear removable.
 The exact NS6711 build also reports `com.amazon.ftvads.deeplinking`,
 `com.amazon.tv.csapp`, and `com.amazon.venezia` as protected packages when
-`pm disable-user --user 0` is attempted. They are mandatory core preserve
-entries and must remain enabled; none is a successful or supported debloat item
-on this model/build.
+`pm disable-user --user 0` is attempted. The first two are mandatory core
+preserve entries. Appstore (`com.amazon.venezia`) is deliberately excluded from
+that preserve list and disabled only by the exact-build, exec-only root stage.
+The visible IMDb package (`com.imdb.livingroom.firetv`) follows the same
+root-only path, while the separate legacy `com.amazon.imdb.tv.android.app`
+package remains an ordinary user-0 candidate. The root-only package list is
+closed and exact; its journal records only verified changes for restoration.
+System Status Monitor (`com.amazon.ssm`) is also an ordinary, reversible
+user-0 candidate. `com.amazon.vizzini.ftvcds` remains in core preservation for
+voice dependencies; hiding its "What Should I Watch" Wolf tile does not disable
+or remove that package.
 
 The enabled package inventory (`pm list packages -e`) is the operative set.
 Each candidate must begin enabled, then be absent from that inventory and
