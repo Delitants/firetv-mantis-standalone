@@ -34,6 +34,14 @@ APKs, exploit material, backups, or screenshots.
   `MainSettingsActivity`. Wolf remained Home, both ADB transports reconnected,
   and the hidden tiles remained absent from Home. The Settings Applications
   page opened the Downloads app information screen; it does not offer Launch.
+- The Settings tile uses Wolf's Vertical tile appearance, placing its label on
+  one line beneath the icon. Its APK source retains English as the default
+  label and supplies Ukrainian only as an optional locale translation.
+- The stock Live TV Settings card was hidden with the reversible
+  `Settings.Secure` key `st_show_live_card=0`. After reboot it was absent from
+  the stock Settings grid. Profiles, Alexa, and Help remain visible: this
+  build's card producer has no comparable per-card visibility setting for
+  them, and their packages were not disabled merely to alter the grid.
 
 ## Post-reboot acceptance
 
@@ -70,3 +78,7 @@ After restoring the Home activities, verify the Home resolver and stock
 Settings routes before removing Wolf Launcher. Do not disable the entire
 `com.amazon.tv.launcher` package: its Settings activities are deliberately
 preserved.
+
+To restore the Live TV card, set `st_show_live_card` to `1` with
+`adb shell settings put secure st_show_live_card 1`, then reboot so the stock
+card producer republishes the Settings grid.

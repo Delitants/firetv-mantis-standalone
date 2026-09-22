@@ -35,6 +35,12 @@ from Wolf Home. The resulting foreground activity must be
 Controllers & Bluetooth Devices, and My Fire TV visible. Verify those pages
 through the tile before relying on it.
 
+To keep the label on one line beneath the icon in Wolf Launcher 0.1.9,
+long-press the Settings tile, choose **Configure**, then set **Tile appearance →
+Type → Vertical**. This is a Wolf layout preference, not an APK resource change.
+The source's default label remains English (`Settings`); the optional Ukrainian
+translation is selected only when the device locale calls for it.
+
 Hiding the Downloads tiles in Wolf does not disable either Downloads package.
 Fire TV Settings → Applications → Manage Installed Applications still opens the
 Downloads app information page. That page does not offer a Launch button or
