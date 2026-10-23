@@ -1,0 +1,20 @@
+name: Publication safety
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  publication-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: .github/publication
+          persist-credentials: false
+      - name: Check source publication
+        run: python3 .github/publication/guard.py history HEAD

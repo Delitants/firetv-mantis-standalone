@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "repository": "Delitants/firetv-mantis-standalone",
+  "baseline": "fe1a963efbd2e8eec04415cb1a2243cd37c423c2",
+  "public_docs": [],
+  "public_data": [],
+  "release_assets": [
+    "firetv-mantis-standalone-*.zip",
+    "firetv-mantis-standalone-*.tar.gz",
+    "SHA256SUMS"
+  ]
+}

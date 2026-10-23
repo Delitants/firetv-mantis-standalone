@@ -3,3 +3,20 @@
 !assets/WolfLauncher_0.1.9-Wolf.apk
 settings-tile/build/
 settings-tile/dist/
+
+# Local publication material
+/work/
+/outputs/
+/reports/
+/test-reports/
+/evidence/
+/docs/superpowers/
+/docs/acceptance/
+/docs/internal/
+/docs/plans/
+/docs/reports/
+/release-evidence.json
+/RELEASE-INFO.json
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
