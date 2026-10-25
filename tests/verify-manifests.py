@@ -69,6 +69,7 @@ MANDATORY_USER_APPS = (
 MANDATORY_ROOT_PACKAGES = (
     "com.amazon.device.software.ota",
     "com.amazon.device.software.ota.override",
+    "com.amazon.firehomestarter",
     "com.imdb.livingroom.firetv",
     "com.amazon.tv.forcedotaupdater.v2",
     "com.amazon.venezia",

@@ -3,6 +3,7 @@ set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$HERE/.." && pwd)
+. "$HERE/apk-badging.sh"
 ADB=adb
 CURL=curl
 AAPT=aapt
@@ -50,11 +51,25 @@ mkdir "$RUN_DIR"
 LOG=$RUN_DIR/deploy.log
 exec 3>&1 4>&2
 exec >"$LOG" 2>&1
-trap 'status=$?; exec 1>&3 2>&4; if [ "$status" -eq 0 ]; then printf "DEPLOY_LOG=%s\n" "$LOG"; else printf "DEPLOY_FAILED status=%s log=%s\n" "$status" "$LOG" >&2; fi; exit "$status"' EXIT HUP INT TERM
+DEPLOY_COMPLETE=no
+trap 'status=$?; exec 1>&3 2>&4; if [ "$status" -eq 0 ] && [ "$DEPLOY_COMPLETE" = yes ]; then printf "DEPLOY_LOG=%s\n" "$LOG"; else [ "$status" -ne 0 ] || status=1; printf "DEPLOY_FAILED status=%s log=%s\n" "$status" "$LOG" >&2; fi; exit "$status"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+printf 'DEPLOY_LOG=%s\n' "$LOG" >&3
 
-adb_cmd() { "$ADB" -s "$SERIAL" "$@" < /dev/null; }
+announce_phase() {
+  printf 'PHASE=%s\n' "$1"
+  printf 'PHASE=%s\n' "$1" >&3
+}
+
+adb_cmd() {
+  adb_timeout=180
+  [ "${1:-}" = wait-for-device ] && adb_timeout=300
+  python3 "$HERE/run-bounded.py" "$adb_timeout" "$ADB" -s "$SERIAL" "$@" < /dev/null
+}
 adb_shell() { adb_cmd shell "$@"; }
-network_adb_cmd() { "$ADB" -s "$NETWORK_SERIAL" "$@" < /dev/null; }
+network_adb_cmd() { python3 "$HERE/run-bounded.py" 180 "$ADB" -s "$NETWORK_SERIAL" "$@" < /dev/null; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 sha256_file() {
@@ -86,26 +101,22 @@ target_gate() {
   printf '%s\n' 'TARGET_GATE=PASS'
 }
 
-badging_value() {
-  printf '%s\n' "$1" | sed -n "s/.*$2='\([^']*\)'.*/\1/p" | head -n 1
-}
-
 install_aurora() {
   url=https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk
   expected_size=9362660
   expected_hash=8a1ed9aa09631290da91cb793e0517b0f20dc70239ac94ae6682cd94f91a4bad
   expected_cert=4c626157ad02bda3401a7263555f68a79663fc3e13a4d4369a12570941aa280f
   apk=$RUN_DIR/AuroraStore-4.8.4.apk
-  "$CURL" --fail --location --output "$apk" "$url" || fail 'Aurora download failed'
+  "$CURL" --fail --location --silent --show-error --connect-timeout 15 --max-time 180 --output "$apk" "$url" || fail 'Aurora download failed'
   [ "$(wc -c < "$apk" | tr -d '[:space:]')" = "$expected_size" ] || fail 'Aurora size mismatch'
   [ "$(sha256_file "$apk")" = "$expected_hash" ] || fail 'Aurora SHA-256 mismatch'
   badging=$("$AAPT" dump badging "$apk") || fail 'Aurora aapt inspection failed'
   package_line=$(printf '%s\n' "$badging" | sed -n '/^package: /p' | head -n 1)
   activity_line=$(printf '%s\n' "$badging" | sed -n '/^launchable-activity: /p' | head -n 1)
-  [ "$(badging_value "$package_line" name)" = com.aurora.store ] || fail 'Aurora package mismatch'
-  [ "$(badging_value "$package_line" versionCode)" = 76 ] || fail 'Aurora versionCode mismatch'
-  [ "$(badging_value "$package_line" versionName)" = 4.8.4 ] || fail 'Aurora versionName mismatch'
-  activity=$(badging_value "$activity_line" name)
+  [ "$(apk_badging_value "$package_line" name)" = com.aurora.store ] || fail 'Aurora package mismatch'
+  [ "$(apk_badging_value "$package_line" versionCode)" = 76 ] || fail 'Aurora versionCode mismatch'
+  [ "$(apk_badging_value "$package_line" versionName)" = 4.8.4 ] || fail 'Aurora versionName mismatch'
+  activity=$(apk_badging_value "$activity_line" name)
   case "$activity" in com.aurora.store.ComposeActivity|.ComposeActivity) ;; *) fail 'Aurora activity mismatch' ;; esac
   signatures=$("$APKSIGNER" verify --verbose --print-certs "$apk") || fail 'Aurora signature verification failed'
   case "$signatures" in *'Verified using v1 scheme (JAR signing): true'*) ;; *) fail 'Aurora v1 signature missing' ;; esac
@@ -122,6 +133,9 @@ install_aurora() {
 
 package_enabled() { adb_shell pm list packages -e | tr -d '\r' | grep -Fqx "package:$1"; }
 package_disabled() { adb_shell pm list packages -d | tr -d '\r' | grep -Fqx "package:$1"; }
+package_hidden() {
+  adb_shell dumpsys package "$1" | tr -d '\r' | grep -F 'User 0:' | grep -Fq 'installed=true hidden=true'
+}
 
 settings_routes_qa() {
   while IFS='|' read -r action expected; do
@@ -146,9 +160,15 @@ qa() {
   target_gate
   while IFS= read -r package; do package_disabled "$package" || fail "$phase debloat state $package"; done < "$ROOT_DIR/manifests/remove-user0.txt"
   while IFS= read -r package; do
-    package_disabled "$package" || fail "$phase root-only disable state $package"
+    package_hidden "$package" || fail "$phase root-only hidden state $package"
   done < "$ROOT_DIR/manifests/disable-root-packages.txt"
-  while IFS= read -r package; do package_enabled "$package" || fail "$phase protected state $package"; done < "$ROOT_DIR/manifests/preserve-user-apps.txt"
+  baseline_packages=$RUN_DIR/debloat-backup/packages-enabled.txt
+  [ -f "$baseline_packages" ] && [ ! -L "$baseline_packages" ] || fail "$phase missing protected-app baseline"
+  while IFS= read -r package; do
+    if grep -Fqx "package:$package" "$baseline_packages"; then
+      package_enabled "$package" || fail "$phase protected state $package"
+    fi
+  done < "$ROOT_DIR/manifests/preserve-user-apps.txt"
   for package in com.amazon.tv.launcher com.amazon.tv.settings.v2 com.android.bluetooth com.amazon.tcomm com.amazon.whisperjoin.middleware.np com.amazon.whisperlink.core.android; do
     package_enabled "$package" || fail "$phase essential state $package"
   done
@@ -171,29 +191,40 @@ qa() {
   done
   adb_shell am start -n com.aurora.store/.ComposeActivity >/dev/null || fail "$phase Aurora launch"
   sleep 2
-  adb_shell dumpsys window windows | grep -F 'mCurrentFocus' | grep -F 'com.aurora.store/.ComposeActivity' >/dev/null || fail "$phase Aurora focus"
-  adb_shell input keyevent 3 >/dev/null || fail "$phase HOME key"
+  aurora_focus=$(adb_shell dumpsys window windows | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
+  case "$aurora_focus" in
+    com.aurora.store/.ComposeActivity|com.aurora.store/com.aurora.store.ComposeActivity) ;;
+    *) fail "$phase Aurora focus actual=$aurora_focus" ;;
+  esac
+  adb_shell am start -a android.intent.action.MAIN -c android.intent.category.HOME >/dev/null || fail "$phase HOME intent"
   sleep 2
-  adb_shell dumpsys window windows | grep -F 'mCurrentFocus' | grep -F 'com.wolf.firelauncher/.screens.launcher.LauncherActivity' >/dev/null || fail "$phase Wolf focus"
+  home_focus=$(adb_shell dumpsys window windows | sed -n 's/.*mCurrentFocus=Window{[^ ]* [^ ]* \([^} ]*\).*/\1/p' | head -n 1)
+  case "$home_focus" in
+    com.wolf.firelauncher/.screens.launcher.LauncherActivity|com.wolf.firelauncher/com.wolf.firelauncher.screens.launcher.LauncherActivity) ;;
+    *) fail "$phase Wolf focus actual=$home_focus" ;;
+  esac
   printf 'QA_%s=PASS\n' "$phase"
 }
 
+announce_phase TARGET_GATE
 target_gate
+announce_phase ROOT_BINARY_CHECK
+python3 "$HERE/check-root-binary.py" "$ROOT_BINARY" || fail 'root binary identity mismatch'
 [ "$(sha256_file "$ROOT_PROFILE")" = 1ac2127f32117bb5a9b8176b5a1b3aae04070fe5843737a875ac5b25999e0fdb ] || fail 'root profile SHA-256 mismatch'
 TOOL=$HERE/mantis-tool.sh
+announce_phase PREFLIGHT_AUDIT
 "$TOOL" --adb "$ADB" --serial "$SERIAL" --network-serial "$NETWORK_SERIAL" --output "$RUN_DIR/preflight-audit" audit
+announce_phase SETTINGS_PREFLIGHT
 "$TOOL" --adb "$ADB" --serial "$SERIAL" verify-settings
-"$TOOL" --adb "$ADB" --curl "$CURL" --aapt "$AAPT" --apksigner "$APKSIGNER" --serial "$SERIAL" --yes install-wolf
-install_aurora
-"$TOOL" --adb "$ADB" --serial "$SERIAL" --network-serial "$NETWORK_SERIAL" --output "$RUN_DIR/debloat-backup" --yes apply
-
-REMOTE=/data/local/tmp/mantis-deploy
-adb_shell rm -rf "$REMOTE"
-adb_shell mkdir -p "$REMOTE"
+announce_phase ROOT_STAGING
+REMOTE=/data/local/tmp/mantis-deploy-$(date -u +%Y%m%dT%H%M%SZ)
+adb_shell mkdir "$REMOTE"
+adb_shell chmod 755 "$REMOTE"
 adb_cmd push "$ROOT_BINARY" "$REMOTE/ghostlock_root" >/dev/null
 adb_cmd push "$ROOT_PROFILE" "$REMOTE/mantis.conf" >/dev/null
 adb_cmd push "$HERE/device-root-actions.sh" "$REMOTE/device-root-actions.sh" >/dev/null
-adb_shell chmod 700 "$REMOTE/ghostlock_root" "$REMOTE/mantis.conf" "$REMOTE/device-root-actions.sh"
+adb_shell chmod 700 "$REMOTE/ghostlock_root" "$REMOTE/mantis.conf"
+adb_shell chmod 755 "$REMOTE/device-root-actions.sh"
 
 for pair in "$ROOT_BINARY:ghostlock_root" "$ROOT_PROFILE:mantis.conf" "$HERE/device-root-actions.sh:device-root-actions.sh"; do
   local_file=${pair%%:*}; remote_file=${pair#*:}
@@ -211,34 +242,83 @@ case "$profile_check" in
   *) fail 'root profile check returned unexpected identity' ;;
 esac
 
-adb_shell "cd $REMOTE && nohup ./ghostlock_root --profile ./mantis.conf --tries 1 --exec ./device-root-actions.sh >root.log 2>&1 </dev/null &"
+announce_phase WOLF_INSTALL
+"$TOOL" --adb "$ADB" --curl "$CURL" --aapt "$AAPT" --apksigner "$APKSIGNER" --serial "$SERIAL" --yes install-wolf
+announce_phase AURORA_INSTALL
+install_aurora
+announce_phase DEBLOAT_APPLY
+MANTIS_PROGRESS_FD=3 "$TOOL" --adb "$ADB" --serial "$SERIAL" --network-serial "$NETWORK_SERIAL" --output "$RUN_DIR/debloat-backup" --yes apply
+
+announce_phase ROOT_ACTIONS
+root_launch_status=0
+python3 "$HERE/run-bounded.py" 20 "$ADB" -s "$SERIAL" shell \
+  "cd $REMOTE && nohup ./ghostlock_root --profile ./mantis.conf --tries 1 --exec ./device-root-actions.sh >root.log 2>&1 </dev/null &" \
+  < /dev/null || root_launch_status=$?
+printf 'ROOT_LAUNCH_ADB_STATUS=%s\n' "$root_launch_status"
+case "$root_launch_status" in 0|124) ;; *) fail "root launcher ADB failed with status $root_launch_status" ;; esac
 root_result=
-for attempt in $(awk 'BEGIN { for (i=1; i<=120; i++) print i }'); do
-  if adb_shell grep -Fq 'ROOT_ACTIONS=PASS' "$REMOTE/root.log"; then root_result=pass; break; fi
-  if adb_shell grep -Fq 'ROOT_ACTIONS=FAIL' "$REMOTE/root.log"; then root_result=fail; break; fi
+root_deadline=$(( $(date +%s) + 300 ))
+root_next_progress=0
+while [ "$(date +%s)" -lt "$root_deadline" ]; do
+  root_now=$(date +%s)
+  if [ "$root_now" -ge "$root_next_progress" ]; then
+    printf 'ROOT_WAIT remaining=%ss\n' "$(( root_deadline - root_now ))"
+    printf 'ROOT_WAIT remaining=%ss\n' "$(( root_deadline - root_now ))" >&3
+    root_next_progress=$(( root_now + 20 ))
+  fi
+  if root_snapshot=$(python3 "$HERE/run-bounded.py" 15 "$ADB" -s "$SERIAL" shell cat "$REMOTE/root.log" 2>/dev/null); then
+    case "$root_snapshot" in
+      *'fops marker absent from every reclaim socket; holding reclaim'*) root_result=fail; break ;;
+      *'ROOT_ACTIONS=FAIL'*) root_result=fail; break ;;
+      *'[exec] ./device-root-actions.sh exited status=0'*)
+        case "$root_snapshot" in *'ROOT_ACTIONS=PASS'*) root_result=pass ;; *) root_result=fail ;; esac
+        break ;;
+      *'[exec] ./device-root-actions.sh exited status='*) root_result=fail; break ;;
+    esac
+  fi
   sleep 2
 done
 adb_cmd pull "$REMOTE/root.log" "$RUN_DIR/root.log" >/dev/null 2>&1 || true
-adb_cmd pull "$REMOTE/root-actions.journal" "$RUN_DIR/root-actions.journal" >/dev/null 2>&1 || true
-adb_cmd pull "$REMOTE/root-actions.journal.md5" "$RUN_DIR/root-actions.journal.md5" >/dev/null 2>&1 || true
-[ "$root_result" = pass ] || { adb_cmd reboot >/dev/null 2>&1 || true; fail "root actions did not pass: ${root_result:-timeout}"; }
+if [ -f "$RUN_DIR/root.log" ]; then
+  sed -n 's/^\[journal\] //p' "$RUN_DIR/root.log" > "$RUN_DIR/root-actions.journal"
+  if [ -s "$RUN_DIR/root-actions.journal" ]; then
+    if command -v md5sum >/dev/null 2>&1; then
+      journal_md5=$(md5sum "$RUN_DIR/root-actions.journal" | awk '{print $1}')
+    else
+      journal_md5=$(md5 -q "$RUN_DIR/root-actions.journal")
+    fi
+    printf '%s  %s\n' "$journal_md5" root-actions.journal > "$RUN_DIR/root-actions.journal.md5"
+  fi
+fi
+[ "$root_result" = pass ] || fail "root actions did not pass: ${root_result:-timeout}; inspect ROOT_ROLLBACK before reboot"
 grep -Fq '[exec] ./device-root-actions.sh exited status=0' "$RUN_DIR/root.log" || fail 'root action exit status missing'
+[ -s "$RUN_DIR/root-actions.journal" ] || fail 'root action journal missing or empty'
+[ "$(tail -n 1 "$RUN_DIR/root-actions.journal")" = complete ] || fail 'root action journal incomplete'
+announce_phase QA_PRE_REBOOT
 qa PRE_REBOOT
 
+announce_phase REBOOT
 adb_cmd reboot >/dev/null
 adb_cmd wait-for-device >/dev/null
-for attempt in $(awk 'BEGIN { for (i=1; i<=120; i++) print i }'); do
-  [ "$(adb_shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && break
+boot_complete=no
+boot_deadline=$(( $(date +%s) + 300 ))
+while [ "$(date +%s)" -lt "$boot_deadline" ]; do
+  boot_value=$(python3 "$HERE/run-bounded.py" 10 "$ADB" -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') || boot_value=
+  if [ "$boot_value" = 1 ]; then boot_complete=yes; break; fi
   sleep 2
 done
-"$ADB" connect "$NETWORK_SERIAL" >/dev/null 2>&1 || true
+[ "$boot_complete" = yes ] || fail 'boot did not complete within 300 seconds'
+python3 "$HERE/run-bounded.py" 60 "$ADB" connect "$NETWORK_SERIAL" >/dev/null 2>&1 || true
 sleep 5
+announce_phase QA_POST_REBOOT
 qa POST_REBOOT
 [ "$(adb_shell id -u | tr -d '\r')" = 2000 ] || fail 'temporary root persisted unexpectedly'
 [ "$(adb_shell getenforce | tr -d '\r')" = Enforcing ] || fail 'SELinux changed after reboot'
 
+announce_phase SCREENSHOT
 adb_shell screencap -p /sdcard/mantis-home-postboot.png
 adb_cmd pull /sdcard/mantis-home-postboot.png "$RUN_DIR/mantis-home-postboot.png" >/dev/null
 adb_shell rm -f /sdcard/mantis-home-postboot.png
 printf '%s\n' 'DEPLOY=PASS'
 printf 'SCREENSHOT=%s\n' "$RUN_DIR/mantis-home-postboot.png"
+DEPLOY_COMPLETE=yes

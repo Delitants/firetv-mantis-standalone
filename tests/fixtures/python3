@@ -3,6 +3,10 @@ set -eu
 
 : "${REAL_PYTHON:?set REAL_PYTHON to the real Python interpreter}"
 
+case "${1:-}" in
+  */run-bounded.py) exec "$REAL_PYTHON" "$@" ;;
+esac
+
 phase=${2:-}
 if [ -n "${RACE_HELPER_LOG:-}" ]; then
   printf '%s\n' "$phase" >> "$RACE_HELPER_LOG"

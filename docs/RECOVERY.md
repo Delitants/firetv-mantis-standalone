@@ -8,9 +8,10 @@ scripts/mantis-tool.sh --serial SERIAL --baseline AUDIT_DIRECTORY verify
 scripts/mantis-tool.sh --serial SERIAL verify-settings
 ```
 
-Use the exact serial for the approved target. `verify` requires preserved
-packages, Bluetooth, the exact Wolf identity and activity, locale continuity,
-WireGuard Always-on/lockdown continuity, tun0 presence, Settings resolvers,
+Use the exact serial for the approved target. `verify` requires core packages
+and user apps present in the backup, Bluetooth, the exact Wolf identity and
+activity, locale continuity,
+WireGuard Always-on/lockdown and tun0 continuity, Settings resolvers,
 ADB Debugging, running adbd, USB ADB configuration, configured TCP 5555, and a
 reachable TCP ADB transport. It reports TCP 8009 separately from
 `NETWORK_REMOTE_OBSERVED=UNVERIFIED`; a listener alone is not proof of
@@ -32,23 +33,23 @@ foreign, or changed route components.
 then checks a focused component and non-empty hierarchy without changing a
 setting. It first opens the exact `com.amazon.tv.settings.v2/.hud.HudActivity`,
 requires the `hud_settings_button` node to be enabled, focusable, and clickable,
-and proves that four Right events plus Select enter the stock Settings task.
+and confirms that node is focused before Select enters the stock Settings task.
 Key 176 is tried first, but its command status is not trusted: if bounded exact
 HUD-focus checks miss, long-press Home is tried and must prove that same focus.
-Failure of both entry methods cleans up and stops verification. A
+Transient HUD focus loss is detected before Select and retried twice; a
+persistent failure stops verification. A
 resumed subpage is valid for this user-facing HUD proof only when it is an exact
 component already present in the protected Settings route table; unchanged HUD
 focus and unknown `settings.v2` activities fail closed. Accessibility,
 Display & Sounds, Date & Time, Language, and the main Settings action are
-permission-protected from direct action launch on this Fire OS build. After the
-expected permission denial, each protected route explicitly launches
+unsafe to launch by generic shell action on this Fire OS build: a compliance
+handler can loop while no window is focused. Each such route instead launches
 `com.amazon.tv.launcher/.ui.MainSettingsActivity` with Android's exact
 `0x04000000` `CLEAR_TOP` flag, verifies exact root focus, then follows
-deterministic D-pad navigation. This prevents an existing Settings task from
-resuming its last subpage. If Fire OS instead returns status
-zero while leaving Home focused, the same explicit root path is required. A
-nonzero result must contain the exact Amazon launcher permission denial; other
-errors fail closed. A missing hierarchy is a failure.
+deterministic D-pad navigation. The verifier waits until the root grid's
+Network tile is focused, then checks each intended tile before Select; this
+prevents a retained grid focus from opening the wrong page. The checked
+resolver remains the route-identity proof. A missing hierarchy is a failure.
 
 Audit and plan must both report:
 
@@ -66,8 +67,8 @@ Do not manually disable `com.amazon.ftvads.deeplinking` or
 `com.amazon.tv.csapp`: this exact NS6711 build marks both protected, and the
 controller requires them to remain enabled through the core-preservation guard.
 Appstore (`com.amazon.venezia`) also rejects the shell-stage operation, so it
-and `com.imdb.livingroom.firetv` are changed only by the guarded root
-stage and recorded in `root-actions.journal`.
+and `com.imdb.livingroom.firetv` are hidden by the guarded root stage and
+recorded in `root-actions.journal`.
 
 If the screen is black or the launcher path is unhealthy, stop package actions.
 Keep the stock remote path, return to stock Home/Settings, and restore the
@@ -93,13 +94,16 @@ runs the preserved-app, Bluetooth, Whisper/Home/Settings, VPN, and USB/network
 ADB guards before removing that package from the checksummed ledger. A failed
 guard retains the ledger entry and prevents `RESTORE=PASS`.
 
-The protected Home components and five root-only packages (three OTA packages,
-Appstore, and the visible IMDb application) require a fresh temporary root
+The protected stock Home activity and six root-only hidden packages (three
+OTA packages, Appstore, visible IMDb, and Home-starter) require a fresh temporary root
 session to restore. Stage `scripts/device-root-restore.sh` and the original
 `root-actions.journal` plus `root-actions.journal.md5` together as the mandatory
-`--exec` operation for the exact-build exploit. The restore script verifies the
-journal with the build's observed `/system/bin/md5sum`, then enables only
-entries that the journal records as changed by that deployment. Verify that it reports
+`--exec` operation for the exact-build exploit. The deployment extracts this
+journal from `[journal]` lines in the retained `root.log` and checksums it on
+the controller host; keep all three files together and do not edit them. The
+restore script verifies the journal with the build's observed
+`/system/bin/md5sum`, then enables or unhides only entries that the journal
+records as changed by that deployment. Verify that it reports
 `ROOT_RESTORE=PASS` before rebooting. Restore the ordinary 30-package user-0
 ledger separately with `mantis-tool.sh restore`; do not treat a root restore as
 a substitute for that checksummed inverse.
@@ -107,6 +111,3 @@ a substitute for that checksummed inverse.
 Do not reboot before pre-reboot verification and a rollback rehearsal. Locale
 is never changed by this controller. If a locale is changed separately, record
 the original value and verify the active Android configuration after reboot.
-The completed deployment set the framework locale to `uk-UA` outside this
-repository; Fire OS Settings remains partly English because the Amazon APKs do
-not provide Ukrainian resources.

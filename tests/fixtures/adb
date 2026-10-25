@@ -1,5 +1,7 @@
 #!/bin/sh
 
+[ -z "${FAKE_ADB_DELAY:-}" ] || sleep "$FAKE_ADB_DELAY"
+
 if [ -n "${FAKE_ADB_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
 fi
@@ -159,6 +161,8 @@ settings_route() {
 ui_focus_for_action() {
   case "$1" in
     wolf) printf '%s\n' 'com.wolf.firelauncher/.screens.launcher.LauncherActivity' ;;
+    home) printf '%s\n' 'com.amazon.tv.launcher/.ui.HomeActivity_vNext' ;;
+    tivimate) printf '%s\n' 'ar.tvplayer.tv/.ui.MainActivity' ;;
     HudActivity) printf '%s\n' 'com.amazon.tv.settings.v2/.hud.HudActivity' ;;
     MainSettingsActivity) printf '%s\n' 'com.amazon.tv.launcher/.ui.MainSettingsActivity' ;;
     PreferencesActivity) printf '%s\n' 'com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity' ;;
@@ -241,17 +245,6 @@ case "$1" in
       secure:always_on_vpn_lockdown) value=${FAKE_ALWAYS_ON_VPN_LOCKDOWN:-1} ;;
       *) printf 'unsupported fake settings query: %s\n' "$*" >&2; exit 64 ;;
     esac
-    ;;
-  ip)
-    [ "${2:-}" = "link" ] && [ "${3:-}" = "show" ] && [ "${4:-}" = "tun0" ] || {
-      printf '%s\n' 'fake adb only exposes ip link show tun0' >&2
-      exit 64
-    }
-    if [ "${FAKE_TUN0:-}" = absent ]; then
-      printf '%s\n' 'Cannot find device "tun0"' >&2
-      exit 1
-    fi
-    value=${FAKE_TUN0:-'7: tun0: <POINTOPOINT,NOARP,UP,LOWER_UP>'}
     ;;
   cmd)
     case "${2:-}" in
@@ -392,25 +385,24 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
         printf '%s\n' 'Error: Activity not started' >&2
         exit 1
       fi
-      state=$(read_ui_state 2>/dev/null || true)
-      case "$state" in protected:*) route=${state#protected:} ;; *) route=android.settings.SETTINGS ;; esac
       clear_top=0; [ "${3:-}" != -f ] || clear_top=1
       if [ "${FAKE_ROOT_REQUIRES_CLEAR_TOP:-0}" = 1 ] &&
         { [ "$clear_top" -ne 1 ] || [ "${FAKE_ROOT_IGNORE_CLEAR_TOP:-0}" = 1 ]; }; then
-        write_ui_state "root-resumed:$route"
+        write_ui_state root-resumed
       else
-        write_ui_state "root:$route"
+        write_ui_state root
       fi
       value='Starting: Intent { cmp=com.amazon.tv.launcher/.ui.MainSettingsActivity }'
     elif [ "${2:-}" = start ] && [ "${3:-}" = -a ] && [ -n "${4:-}" ]; then
       action=${4}
+      if [ "${FAKE_STOCK_MENU_WRONG_ERROR_ACTION:-}" = "$action" ]; then
+        printf '%s\n' 'Error: Activity not started' >&2
+        exit 1
+      fi
       case "$action" in
         android.settings.SETTINGS|android.settings.ACCESSIBILITY_SETTINGS|android.settings.DISPLAY_SETTINGS|com.amazon.device.settings.action.DATE_TIME|com.amazon.device.settings.action.LANGUAGE)
           if [ "${FAKE_STOCK_MENU_STATUS0_ACTION:-}" = "$action" ]; then
             value="Starting: Intent { act=$action }"
-          elif [ "${FAKE_STOCK_MENU_WRONG_ERROR_ACTION:-}" = "$action" ]; then
-            printf '%s\n' 'Error: Activity not started' >&2
-            exit 1
           else
             write_ui_state "protected:$action"
             printf '%s\n' 'Permission Denial: starting Intent requires com.amazon.tv.permission.LAUNCHER_SETTINGS' >&2
@@ -440,24 +432,43 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
         esac
         ;;
       hud|hud-sequence:*)
-        case "$state" in hud) history=$event ;; *) history=${state#hud-sequence:},$event ;; esac
-        if [ "$history" = '22,22,22,22,23' ]; then write_ui_state hud-selected; else write_ui_state "hud-sequence:$history"; fi
+        if [ "${FAKE_HUD_LOSE_FOCUS_ONCE:-0}" = 1 ] && [ "$event" = 22 ] &&
+          [ -n "${FAKE_HUD_LOSS_MARKER:-}" ] && [ ! -e "$FAKE_HUD_LOSS_MARKER" ]; then
+          : > "$FAKE_HUD_LOSS_MARKER"
+          write_ui_state home
+        else
+          case "$state" in hud) history=$event ;; *) history=${state#hud-sequence:},$event ;; esac
+          if [ "$history" = '22,22,22,22,23' ]; then write_ui_state hud-selected; else write_ui_state "hud-sequence:$history"; fi
+        fi
         ;;
-      root:*)
-        route=${state#root:}
-        case "$event" in 4|3) ;; *) write_ui_state "root-sequence:$route:$event" ;; esac
+      home)
+        case "$event" in
+          176|--longpress:3) write_ui_state hud ;;
+          23) write_ui_state tivimate ;;
+        esac
+        ;;
+      root)
+        case "$event" in 4|3) ;; *) write_ui_state "root-sequence:$event" ;; esac
         ;;
       root-sequence:*)
-        route=${state#root-sequence:}; route=${route%%:*}
-        history=${state#*:*:}; history="$history,$event"
-        case "$route" in
-          android.settings.DISPLAY_SETTINGS) expected='20,23' ;;
-          android.settings.ACCESSIBILITY_SETTINGS) expected='20,20,22,22,23' ;;
-          com.amazon.device.settings.action.DATE_TIME) expected='20,22,22,23' ;;
-          com.amazon.device.settings.action.LANGUAGE) expected='20,22,22,23,20,20,20,20,20,20,20,23' ;;
-          *) expected=never ;;
+        history=${state#root-sequence:}; history="$history,$event"
+        case "$history" in
+          20,23) write_ui_state 'ready:android.settings.DISPLAY_SETTINGS' ;;
+          20,20,22,22,23) write_ui_state 'ready:android.settings.ACCESSIBILITY_SETTINGS' ;;
+          20,22,22,23) write_ui_state 'ready:com.amazon.device.settings.action.DATE_TIME' ;;
+          *) write_ui_state "root-sequence:$history" ;;
         esac
-        if [ "$history" = "$expected" ]; then write_ui_state "ready:$route"; else write_ui_state "root-sequence:$route:$history"; fi
+        ;;
+      ready:com.amazon.device.settings.action.DATE_TIME)
+        [ "$event" != 20 ] || write_ui_state language-sequence:20
+        ;;
+      language-sequence:*)
+        history=${state#language-sequence:}; history="$history,$event"
+        if [ "$history" = '20,20,20,20,20,20,20,23' ]; then
+          write_ui_state 'ready:com.amazon.device.settings.action.LANGUAGE'
+        else
+          write_ui_state "language-sequence:$history"
+        fi
         ;;
     esac
     value=
@@ -468,16 +479,15 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
       action=${state#*:}; [ "$state" = wolf ] && action=wolf
       case "$state" in
         ready:*) action=${state#ready:} ;;
+        home|tivimate) action=$state ;;
         hud|hud-sequence:*) action=HudActivity ;;
         hud-selected) focus=${FAKE_HUD_POST_SELECT_FOCUS:-com.amazon.tv.launcher/.ui.MainSettingsActivity}; action=explicit ;;
-        root:*) action=MainSettingsActivity ;;
-        root-resumed:*) action=PreferencesActivity ;;
+        root) action=MainSettingsActivity ;;
+        root-resumed) action=PreferencesActivity ;;
         root-sequence:*|protected:*) action=wrong ;;
+        language-sequence:*) action=PreferencesActivity ;;
       esac
-      case "$state" in
-        root-sequence:*:20,22,22,23) action=PreferencesActivity ;;
-      esac
-      [ "$action" != "$state" ] || action=wolf
+      case "$state" in home|tivimate) ;; *) [ "$action" != "$state" ] || action=wolf ;; esac
       [ "$action" = explicit ] || focus=$(ui_focus_for_action "$action")
       if [ "$action" = MainSettingsActivity ] && [ -n "${FAKE_ROOT_FOCUS:-}" ]; then focus=$FAKE_ROOT_FOCUS; fi
       [ -z "${FAKE_CURRENT_FOCUS:-}" ] || focus=$FAKE_CURRENT_FOCUS
@@ -514,16 +524,39 @@ versionName=$wolf_version_name"
     value='UI hierchary dumped to: /sdcard/mantis-ui-smoke.xml'
     ;;
   cat)
+    if [ "${2:-}" = /proc/net/dev ]; then
+      if [ "${FAKE_NETDEV_DENIED:-no}" = yes ]; then
+        printf '%s\n' 'Permission denied' >&2
+        exit 1
+      fi
+      printf '%s\n' 'Inter-| Receive' ' face |bytes' '    lo: 0 0 0 0 0 0 0 0'
+      if [ "${FAKE_TUN0:-}" != absent ]; then
+        printf '%s\n' "${FAKE_TUN0:-  tun0: 0 0 0 0 0 0 0 0}"
+      fi
+      exit 0
+    fi
     [ "${2:-}" = /sdcard/mantis-ui-smoke.xml ] || { printf 'unsupported fake cat command: %s\n' "$*" >&2; exit 64; }
     state=$(read_ui_state 2>/dev/null || true)
     action=${state#*:}
     case "$state" in
       hud|hud-sequence:*)
+        settings_focused=false
+        [ "$state" != hud-sequence:22,22,22,22 ] || settings_focused=true
         case "${FAKE_HUD_SETTINGS_TILE:-valid}" in
           missing) value='<hierarchy><node text="Profiles" resource-id="com.amazon.tv.settings.v2:id/hud_profiles_button" enabled="true" focusable="true" focused="true" clickable="true" /></hierarchy>' ;;
           nonclickable) value='<hierarchy><node text="Settings" resource-id="com.amazon.tv.settings.v2:id/hud_settings_button" enabled="true" focusable="true" clickable="false" /></hierarchy>' ;;
-          *) value='<hierarchy><node text="Profiles" resource-id="com.amazon.tv.settings.v2:id/hud_profiles_button" enabled="true" focusable="true" focused="true" clickable="true" /><node text="Settings" resource-id="com.amazon.tv.settings.v2:id/hud_settings_button" enabled="true" focusable="true" focused="false" clickable="true" /></hierarchy>' ;;
+          *) value="<hierarchy><node text=\"Profiles\" resource-id=\"com.amazon.tv.settings.v2:id/hud_profiles_button\" enabled=\"true\" focusable=\"true\" focused=\"true\" clickable=\"true\" /><node text=\"Settings\" resource-id=\"com.amazon.tv.settings.v2:id/hud_settings_button\" enabled=\"true\" focusable=\"true\" focused=\"$settings_focused\" clickable=\"true\" /></hierarchy>" ;;
         esac
+        ;;
+      root|root-sequence:*)
+        case "$state" in
+          root) tile=Network ;;
+          root-sequence:20) tile='Display &amp; Sounds' ;;
+          root-sequence:20,20,22,22) tile=Accessibility ;;
+          root-sequence:20,22,22) tile=Preferences ;;
+          *) tile=Unknown ;;
+        esac
+        value="<hierarchy><node text=\"\" focused=\"true\" clickable=\"true\"><node text=\"$tile\" resource-id=\"com.amazon.tv.launcher:id/title_text\" /></node></hierarchy>"
         ;;
       *)
         if [ "$action" = "${FAKE_UI_EMPTY_ACTION:-}" ]; then value='<hierarchy></hierarchy>'; else value='<hierarchy><node text="Settings" /></hierarchy>'; fi

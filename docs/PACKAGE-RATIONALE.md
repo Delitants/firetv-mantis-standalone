@@ -8,17 +8,27 @@ disablement.
 
 The preservation lists cover stock Settings and its dependencies, Home,
 Bluetooth/input, networking, DIAL/SSDP, Whisper services, package installation,
-and recovery support. The five protected user applications are preserved even
-when a generic package category might otherwise make them appear removable.
+and recovery support. Protected user applications that are enabled in the
+pre-change backup must remain enabled; absent apps are not installed or
+required. Wolf and Aurora are installed by the deployment before that backup.
 The exact NS6711 build also reports `com.amazon.ftvads.deeplinking`,
 `com.amazon.tv.csapp`, and `com.amazon.venezia` as protected packages when
 `pm disable-user --user 0` is attempted. The first two are mandatory core
 preserve entries. Appstore (`com.amazon.venezia`) is deliberately excluded from
-that preserve list and disabled only by the exact-build, exec-only root stage.
+that preserve list and hidden for user 0 only by the exact-build, exec-only root stage.
 The visible IMDb package (`com.imdb.livingroom.firetv`) follows the same
 root-only path, while the separate legacy `com.amazon.imdb.tv.android.app`
 package remains an ordinary user-0 candidate. The root-only package list is
 closed and exact; its journal records only verified changes for restoration.
+Root-only hidden packages retain their system APKs, are verified through
+`dumpsys package` (`User 0: installed=true hidden=true`), and are restored with
+`pm unhide --user 0`. A normal `pm disable` on these packages was observed to
+revert at reboot on this build, so a post-reboot disabled-list check is not
+evidence of durable removal.
+The root stage also hides `com.amazon.firehomestarter` before disabling only
+`com.amazon.tv.launcher/.ui.HomeActivity_vNext`. This leaves the Amazon
+launcher package and its Settings activities enabled while Wolf resolves as
+Home.
 System Status Monitor (`com.amazon.ssm`) is also an ordinary, reversible
 user-0 candidate. `com.amazon.vizzini.ftvcds` remains in core preservation for
 voice dependencies; hiding its "What Should I Watch" Wolf tile does not disable

@@ -12,8 +12,8 @@ image, or `/system` operation here. The controller only uses
 only when `pm help` proves both that form and the exact `pm enable --user 0`
 inverse.
 This is a package-manager state change for user 0, not erasure from the system
-image. The completed live deployment used temporary root for protected
-Home-component and OTA state; see `DEPLOYED-STATE.md`.
+image. The root stage hides six exact packages for user 0 and disables only
+the stock Home activity; see `RECOVERY.md`.
 
 The released Mantis root path is exec-only, requires one staged action script,
 allows one attempt per boot, leaves SELinux Enforcing, and exposes no root
@@ -22,7 +22,7 @@ literal-matched to the full product/model/fingerprint/incremental/kernel tuple.
 
 Never remove, disable, clear, reinstall, or update the protected user apps:
 `ar.tvplayer.tv`, `com.wireguard.android`, and `tv.sweet.tvplayer`. Preserve
-Bluetooth, stock Home and Settings, input, DIAL, SSDP, Whisper services,
+Bluetooth, the stock launcher package and Settings, input, DIAL, SSDP, Whisper services,
 `tcomm`, `dp.logger`, and the Fire TV remote path.
 
 USB configuration containing `adb` and network ADB on TCP 5555 are separate

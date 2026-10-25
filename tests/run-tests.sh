@@ -2,6 +2,11 @@
 set -eu
 
 SOURCE_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+sh "$SOURCE_ROOT/tests/test-apk-badging.sh"
+sh "$SOURCE_ROOT/tests/test-root-binary-identity.sh"
+sh "$SOURCE_ROOT/tests/test-hud-focus-retry.sh"
+sh "$SOURCE_ROOT/tests/test-settings-grid-focus.sh"
+sh "$SOURCE_ROOT/tests/test-tun0-probe.sh"
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mantis-tool-tests.XXXXXX")
 ROOT="$TEST_TMP/repository"
 cp -R "$SOURCE_ROOT" "$ROOT"
@@ -28,7 +33,7 @@ export FAKE_ADB_LOG="$TEST_TMP/adb.log"
 REAL_PYTHON_BIN=$(command -v python3)
 unset FAKE_MANUFACTURER FAKE_MODEL FAKE_DEVICE FAKE_BUILD_ID FAKE_INCREMENTAL
 unset FAKE_RELEASE FAKE_SDK FAKE_ABI FAKE_UNAME FAKE_ENFORCE FAKE_UID
-unset FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES FAKE_HOME FAKE_BLUETOOTH_ON FAKE_TUN0
+unset FAKE_PERSIST_SYS_LOCALE FAKE_SYSTEM_LOCALES FAKE_HOME FAKE_BLUETOOTH_ON FAKE_TUN0 FAKE_NETDEV_DENIED
 unset FAKE_ADB_ENABLED FAKE_DEVELOPMENT_SETTINGS_ENABLED FAKE_PERSIST_USB_CONFIG FAKE_SYS_USB_CONFIG
 unset FAKE_SERVICE_ADB_TCP_PORT FAKE_PERSIST_ADB_TCP_PORT FAKE_ADBD_PID FAKE_INIT_SVC_ADBD FAKE_ALWAYS_ON_VPN_APP
 unset FAKE_ALWAYS_ON_VPN_LOCKDOWN FAKE_PACKAGE_STATE FAKE_DISABLE_MODE FAKE_DISABLE_FAIL_PACKAGE
@@ -625,6 +630,40 @@ assert_not_contains "$OUT" 'com.amazon.ftvads.deeplinking'
 assert_not_contains "$OUT" 'com.amazon.tv.csapp'
 assert_not_contains "$OUT" 'com.amazon.venezia'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm disable-user --user 0'
+
+# A protected user app is a preservation requirement only when it was enabled
+# at the pre-mutation baseline. A fresh stick need not have VPN or TV apps.
+OPTIONAL_APPS_DIR="$TEST_TMP/apply-optional-user-apps"
+prepare_package_state
+set_wolf_ready
+export FAKE_ALWAYS_ON_VPN_APP=none FAKE_ALWAYS_ON_VPN_LOCKDOWN=0 FAKE_TUN0=absent
+awk '
+  $1 == "active" && ($2 == "com.wireguard.android" || $2 == "tv.sweet.tvplayer") { next }
+  { print }
+' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
+run_tool --output "$OPTIONAL_APPS_DIR" --yes apply ||
+  fail "apply rejected absent optional user apps: $ERR"
+assert_contains "$OUT" 'APPLY=PASS'
+assert_contains "$OUT" 'APPLY_PROGRESS=0/2'
+assert_contains "$OUT" 'APPLY_PROGRESS=1/2 package=com.amazon.android.marketplace'
+assert_contains "$OUT" 'APPLY_PROGRESS=2/2 package=com.amazon.bueller.music'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm enable --user 0 com.wireguard.android'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm enable --user 0 tv.sweet.tvplayer'
+VERIFY_BASELINE=$OPTIONAL_APPS_DIR
+run_verify || fail "verify rejected absent optional user apps: $ERR"
+awk '
+  $1 == "active" && $2 == "ar.tvplayer.tv" { print "disabled", $2; next }
+  { print }
+' "$FAKE_PACKAGE_STATE" > "$FAKE_PACKAGE_STATE.next"
+mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
+if run_verify; then
+  fail 'verify accepted the loss of a user app present in its baseline'
+fi
+assert_contains "$ERR" 'guard missing enabled package: ar.tvplayer.tv'
+prepare_package_state
+set_wolf_ready
+VERIFY_BASELINE=$AUDIT_DIR
 
 # Break caught: package manifests and restore ledgers are controller input, not
 # adb input. A draining adb must not truncate apply, rollback, or restore loops.
@@ -1373,25 +1412,31 @@ assert_contains "$ERR" 'HUD entry failed after keyevent 176 and long-press Home'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent --longpress 3'
 assert_not_contains "$OUT" 'UI_SMOKE=PASS'
 
-# Break caught: Fire OS may report a successful stock-menu action start while
-# leaving Home focused. Status zero is safe only because the controller then
-# opens and verifies the exact stock root before deterministic navigation.
+# Break caught: a direct stock-menu action can enter a looping compliance
+# handler. Use only the checked resolver and the exact stock root/menu path.
 prepare_package_state
 set_wolf_ready
 FAKE_STOCK_MENU_STATUS0_ACTION=android.settings.SETTINGS \
-  run_verify_settings || fail "verify-settings rejected a status-zero stock-menu no-op: $ERR"
+  run_verify_settings || fail "verify-settings rejected the stock-menu path: $ERR"
 assert_contains "$OUT" 'UI_SMOKE=PASS'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -a android.settings.SETTINGS'
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -a android.settings.SETTINGS'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
-# A nonzero stock-menu launch remains acceptable only for the exact Amazon
-# launcher permission denial, never an arbitrary start failure.
+# The stock-menu path must not try the shell action even when it would error.
 prepare_package_state
 set_wolf_ready
-if FAKE_STOCK_MENU_WRONG_ERROR_ACTION=android.settings.SETTINGS run_verify_settings; then
-  fail 'verify-settings accepted a nonzero stock-menu launch with the wrong error'
+FAKE_STOCK_MENU_WRONG_ERROR_ACTION=android.settings.SETTINGS \
+  run_verify_settings || fail "verify-settings invoked the stock-menu shell action: $ERR"
+assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -a android.settings.SETTINGS'
+assert_contains "$OUT" 'UI_SMOKE=PASS'
+
+# Shell-safe routes still require a successful direct action start.
+prepare_package_state
+set_wolf_ready
+if FAKE_STOCK_MENU_WRONG_ERROR_ACTION=android.settings.WIFI_SETTINGS run_verify_settings; then
+  fail 'verify-settings accepted a failed Wi-Fi action start'
 fi
-assert_contains "$ERR" 'Settings direct launch did not show stock-menu permission denial'
+assert_contains "$ERR" 'Settings action could not be opened: android.settings.WIFI_SETTINGS'
 assert_not_contains "$OUT" 'UI_SMOKE=PASS'
 
 # Break caught: HUD selection proves the user-facing path even when Settings
@@ -1494,9 +1539,12 @@ fi
 assert_contains "$ERR" 'guard missing enabled package: com.amazon.tcomm'
 
 # Break caught: protected applications are mandatory even when their package
-# name appears outside the generic preserve manifests.
+# name appears outside the generic preserve manifests, if the baseline had it.
 prepare_package_state
 set_wolf_ready
+WIREGUARD_AUDIT_DIR="$TEST_TMP/audit-wireguard-present"
+run_tool --output "$WIREGUARD_AUDIT_DIR" audit || fail "WireGuard baseline audit failed: $ERR"
+VERIFY_BASELINE=$WIREGUARD_AUDIT_DIR
 awk '
   $1 == "active" && $2 == "com.wireguard.android" { print "disabled", $2; next }
   { print }
@@ -1506,6 +1554,7 @@ if run_verify; then
   fail 'verify accepted an absent protected application'
 fi
 assert_contains "$ERR" 'guard missing enabled package: com.wireguard.android'
+VERIFY_BASELINE=$AUDIT_DIR
 
 # Break caught: Bluetooth and the exact Wolf launcher identity are recovery
 # gates, not merely install history.
@@ -1669,7 +1718,7 @@ fi
 rm "$SCAN_FIXTURE/destructive.sh"
 
 for documentation in README.md NOTICE.md SECURITY.md docs/MODEL-SAFETY.md \
-  docs/PACKAGE-RATIONALE.md docs/RECOVERY.md docs/TEST-EVIDENCE.md; do
+  docs/PACKAGE-RATIONALE.md docs/RECOVERY.md; do
   assert_file "$ROOT/$documentation"
 done
 
@@ -1681,6 +1730,8 @@ cmp "$ORIGINAL_REMOVE" "$MANIFEST_REMOVE" >/dev/null || fail 'test run changed c
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 python3 -B "$ROOT/tests/test-atomic-rename.py"
 sh "$ROOT/tests/test-deploy-static.sh"
+sh "$ROOT/tests/test-deploy-progress.sh"
+sh "$ROOT/tests/test-bounded-command.sh"
 sh "$ROOT/tests/test-bundled-wolf.sh"
 
 printf '%s\n' 'PASS: target gate tests'

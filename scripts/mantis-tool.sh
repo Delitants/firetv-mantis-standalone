@@ -16,6 +16,7 @@ BASELINE=
 CR=$(printf '\r')
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 MANIFEST_DIR=$SCRIPT_DIR/../manifests
+. "$SCRIPT_DIR/apk-badging.sh"
 
 usage() {
   printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--network-serial SERIAL:5555] [--baseline AUDIT_DIRECTORY] [--output DIR] [--yes] audit|plan|apply|install-wolf|restore BACKUP_DIRECTORY|verify|verify-settings' >&2
@@ -98,13 +99,13 @@ fi
 [ -n "$SERIAL" ] || { printf '%s\n' '--serial is required for device commands' >&2; exit 64; }
 
 adb_cmd() {
-  "$ADB" -s "$SERIAL" "$@" < /dev/null
+  python3 "$SCRIPT_DIR/run-bounded.py" 180 "$ADB" -s "$SERIAL" "$@" < /dev/null
 }
 
 adb_shell() {
   adb_cmd shell "$@"
 }
-network_adb_cmd() { "$ADB" -s "${NETWORK_SERIAL:-$SERIAL}" "$@" < /dev/null; }
+network_adb_cmd() { python3 "$SCRIPT_DIR/run-bounded.py" 180 "$ADB" -s "${NETWORK_SERIAL:-$SERIAL}" "$@" < /dev/null; }
 network_read_prop() { network_adb_cmd shell getprop "$1"; }
 require_network_target() {
   for pair in 'ro.product.manufacturer:Amazon' 'ro.product.model:AFTMM' 'ro.product.device:mantis' 'ro.build.id:NS6711' 'ro.build.version.incremental:0011644900484'; do
@@ -134,6 +135,15 @@ read_shell() {
   fi
   strip_one_trailing_cr "$ACTUAL"
   ACTUAL=$NORMALIZED
+}
+
+read_tun0_state() {
+  # Fire OS may deny `ip link show` to the ADB shell even while this
+  # procfs interface table remains readable. A failed read is not absence.
+  read_shell cat /proc/net/dev || return 1
+  TUN0_LINE=$(printf '%s\n' "$ACTUAL" | awk '$1 == "tun0:" { print; exit }') || return 1
+  TUN0_STATE=absent
+  [ -z "$TUN0_LINE" ] || TUN0_STATE=present
 }
 
 prop_label() {
@@ -407,11 +417,8 @@ write_verification_baseline() {
     read_shell settings get secure "$key" || return 1
     printf '%s=%s\n' "$key" "$ACTUAL" >> "$audit_file"
   done
-  if read_shell ip link show tun0; then
-    printf 'tun0=present\n' >> "$audit_file"
-  else
-    printf 'tun0=absent\n' >> "$audit_file"
-  fi
+  read_tun0_state || return 1
+  printf 'tun0=%s\n' "$TUN0_STATE" >> "$audit_file"
   [ -n "${HOME_RESOLVER_COMPONENT:-}" ] || return 1
   if [ -n "${GUARD_HOME_RESOLVER_COMPONENT+x}" ] &&
     [ "$HOME_RESOLVER_COMPONENT" != "$GUARD_HOME_RESOLVER_COMPONENT" ]
@@ -425,7 +432,12 @@ write_verification_baseline() {
 
 write_tun0_capture() {
   audit_file=$1
-  if read_shell ip link show tun0; then printf '%s\n' "$ACTUAL" > "$audit_file"; else printf '%s\n' absent > "$audit_file"; fi
+  read_tun0_state || return 1
+  if [ "$TUN0_STATE" = present ]; then
+    printf '%s\n' "$TUN0_LINE" > "$audit_file"
+  else
+    printf '%s\n' absent > "$audit_file"
+  fi
 }
 
 # action|resolved component|expected visible component|access path
@@ -629,28 +641,35 @@ capture_package_state() {
   PACKAGE_DISABLED=$ACTUAL
 }
 
-require_active_packages() {
+require_preserved_active_packages() {
   active_packages=$1
-  shift
-  for required_package in "$@"; do
+  [ "${GUARD_BASELINE_ACTIVE_PACKAGES+x}" ] || {
+    printf '%s\n' 'guard enabled-package baseline is missing' >&2
+    return 1
+  }
+  while IFS= read -r required_package; do
     package_list_contains "$active_packages" "$required_package" || {
       printf 'guard missing enabled package: %s\n' "$required_package" >&2
       return 1
     }
-  done
-}
-
-require_preserved_active_packages() {
-  active_packages=$1
-  script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-  for preserve_manifest in "$MANIFEST_DIR/preserve-core.txt" "$MANIFEST_DIR/preserve-user-apps.txt"; do
-    while IFS= read -r required_package; do
+  done < "$MANIFEST_DIR/preserve-core.txt"
+  while IFS= read -r required_package; do
+    if package_list_contains "$GUARD_BASELINE_ACTIVE_PACKAGES" "$required_package"; then
       package_list_contains "$active_packages" "$required_package" || {
         printf 'guard missing enabled package: %s\n' "$required_package" >&2
         return 1
       }
-    done < "$preserve_manifest"
-  done
+    fi
+  done < "$MANIFEST_DIR/preserve-user-apps.txt"
+}
+
+load_baseline_active_packages() {
+  baseline_packages_file=$1/packages-enabled.txt
+  [ -f "$baseline_packages_file" ] && [ ! -L "$baseline_packages_file" ] || {
+    printf '%s\n' 'guard enabled-package baseline is missing' >&2
+    return 1
+  }
+  GUARD_BASELINE_ACTIVE_PACKAGES=$(cat "$baseline_packages_file") || return 1
 }
 
 require_usb_adb() {
@@ -780,7 +799,6 @@ require_settings_routes() {
 verify_active_packages() {
   active_package_list || return 1
   require_preserved_active_packages "$ACTIVE_PACKAGES" || return 1
-  require_active_packages "$ACTIVE_PACKAGES" ar.tvplayer.tv com.wireguard.android tv.sweet.tvplayer || return 1
 }
 
 verify_value() {
@@ -857,7 +875,7 @@ verify_vpn_and_locale() {
   verify_value system_locales "$(baseline_value system_locales)" getprop system_locales || return 1
   verify_value always_on_vpn_app "$(baseline_value always_on_vpn_app)" settings get secure always_on_vpn_app || return 1
   verify_value always_on_vpn_lockdown "$(baseline_value always_on_vpn_lockdown)" settings get secure always_on_vpn_lockdown || return 1
-  capture_tun0_state
+  capture_tun0_state || return 1
   expected_tun=$(baseline_value tun0)
   actual_tun=absent; [ "$GUARD_TUN0_STATE" != absent ] && actual_tun=present
   [ "$actual_tun" = "$expected_tun" ] || {
@@ -873,6 +891,9 @@ verify_vpn_and_locale() {
 verify() {
   require_target
   validate_manifests
+  [ -n "$BASELINE" ] || { printf '%s\n' '--baseline is required for verify' >&2; exit 1; }
+  verify_backup_integrity "$BASELINE" || { printf '%s\n' 'baseline integrity verification failed' >&2; exit 1; }
+  load_baseline_active_packages "$BASELINE" || exit 1
   verify_active_packages || exit 1
   require_wolf_ready || exit 1
   read_guard_value bluetooth_on settings get global bluetooth_on || exit 1
@@ -970,14 +991,14 @@ settings_focus_matches_silent() {
   return 1
 }
 
-prove_stock_settings_hud() {
+prove_stock_settings_hud_once() {
   settings_key 176 >/dev/null 2>&1 || true
   if ! settings_focus_matches_silent com.amazon.tv.settings.v2/.hud.HudActivity; then
     settings_key --longpress 3 >/dev/null 2>&1 || true
     settings_focus_matches_silent com.amazon.tv.settings.v2/.hud.HudActivity || {
       printf '%s\n' 'HUD entry failed after keyevent 176 and long-press Home' >&2
       settings_cleanup
-      return 1
+      return 75
     }
   fi
   read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || { settings_cleanup; return 1; }
@@ -993,15 +1014,47 @@ prove_stock_settings_hud() {
     settings_cleanup
     return 1
   }
-  for hud_step in 1 2 3 4; do settings_key 22 || { settings_cleanup; return 1; }; done
+  for hud_step in 1 2 3 4; do
+    settings_key 22 || { settings_cleanup; return 1; }
+    settings_focus_matches_silent com.amazon.tv.settings.v2/.hud.HudActivity || {
+      printf '%s\n' 'HUD focus changed during Settings navigation' >&2
+      settings_cleanup
+      return 75
+    }
+  done
+  read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || { settings_cleanup; return 1; }
+  read_shell cat /sdcard/mantis-ui-smoke.xml || { settings_cleanup; return 1; }
+  printf '%s\n' "$ACTUAL" | awk '
+    BEGIN { RS = "<node " }
+    index($0, "resource-id=\"com.amazon.tv.settings.v2:id/hud_settings_button\"") &&
+    index($0, "focused=\"true\"") { found++ }
+    END { exit found == 1 ? 0 : 1 }
+  ' || {
+    printf '%s\n' 'HUD Settings tile did not gain focus' >&2
+    settings_cleanup
+    return 75
+  }
   settings_key 23 || { settings_cleanup; return 1; }
   settings_current_focus || { settings_cleanup; return 1; }
   hud_post_select_component_allowed "$SETTINGS_CURRENT_FOCUS" || {
     printf 'HUD Settings selection did not enter a known stock Settings destination: %s\n' "$SETTINGS_CURRENT_FOCUS" >&2
     settings_cleanup
-    return 1
+    return 75
   }
   settings_cleanup
+}
+
+prove_stock_settings_hud() {
+  hud_attempt=1
+  while [ "$hud_attempt" -le 3 ]; do
+    if prove_stock_settings_hud_once; then return 0; else hud_result=$?; fi
+    [ "$hud_result" = 75 ] || return "$hud_result"
+    [ "$hud_attempt" -lt 3 ] || return 1
+    printf 'HUD navigation retry after transient focus loss: attempt %s\n' "$hud_attempt" >&2
+    sleep 3
+    hud_attempt=$((hud_attempt + 1))
+  done
+  return 1
 }
 
 open_stock_settings_root() {
@@ -1013,7 +1066,36 @@ open_stock_settings_root() {
     *'Starting: Intent'*) ;;
     *) printf '%s\n' 'stock Settings root launch failed' >&2; return 1 ;;
   esac
-  settings_focus com.amazon.tv.launcher/.ui.MainSettingsActivity
+  settings_focus com.amazon.tv.launcher/.ui.MainSettingsActivity || return 1
+  # CLEAR_TOP can return before this grid resets its retained tile focus.
+  # Moving immediately can select a different tile (Equipment Control on the
+  # observed target), so wait for the Network tile to be visibly focused.
+  grid_attempt=1
+  while [ "$grid_attempt" -le 3 ]; do
+    if grid_title=$(stock_grid_focus 2>/dev/null) && [ "$grid_title" = Network ]; then
+      return 0
+    fi
+    [ "$grid_attempt" -lt 3 ] || break
+    sleep 1
+    grid_attempt=$((grid_attempt + 1))
+  done
+  printf 'Settings root grid did not focus Network: actual=%s\n' "${grid_title:-unreadable}" >&2
+  return 1
+}
+
+stock_grid_focus() {
+  read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || return 1
+  read_shell cat /sdcard/mantis-ui-smoke.xml || return 1
+  printf '%s\n' "$ACTUAL" | python3 "$SCRIPT_DIR/settings-grid-focus.py"
+}
+
+expect_stock_grid_tile() {
+  expected_grid_tile=$1
+  actual_grid_tile=$(stock_grid_focus) || return 1
+  [ "$actual_grid_tile" = "$expected_grid_tile" ] || {
+    printf 'Settings grid tile expected=%s actual=%s\n' "$expected_grid_tile" "$actual_grid_tile" >&2
+    return 1
+  }
 }
 
 assert_settings_ui() {
@@ -1044,10 +1126,10 @@ stock_menu_settings_navigation() {
   open_stock_settings_root || return 1
   case "$settings_action" in
     android.settings.SETTINGS) ;;
-    android.settings.DISPLAY_SETTINGS) settings_key 20 || return 1; settings_key 23 || return 1 ;;
-    android.settings.ACCESSIBILITY_SETTINGS) for n in 1 2; do settings_key 20 || return 1; done; for n in 1 2; do settings_key 22 || return 1; done; settings_key 23 || return 1 ;;
+    android.settings.DISPLAY_SETTINGS) settings_key 20 || return 1; expect_stock_grid_tile "Display & Sounds" || return 1; settings_key 23 || return 1 ;;
+    android.settings.ACCESSIBILITY_SETTINGS) for n in 1 2; do settings_key 20 || return 1; done; for n in 1 2; do settings_key 22 || return 1; done; expect_stock_grid_tile Accessibility || return 1; settings_key 23 || return 1 ;;
     com.amazon.device.settings.action.DATE_TIME|com.amazon.device.settings.action.LANGUAGE)
-      settings_key 20 || return 1; for n in 1 2; do settings_key 22 || return 1; done; settings_key 23 || return 1
+      settings_key 20 || return 1; for n in 1 2; do settings_key 22 || return 1; done; expect_stock_grid_tile Preferences || return 1; settings_key 23 || return 1
       settings_focus com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity || return 1
       if [ "$settings_action" = com.amazon.device.settings.action.LANGUAGE ]; then for n in 1 2 3 4 5 6 7; do settings_key 20 || return 1; done; settings_key 23 || return 1; fi
       ;;
@@ -1065,24 +1147,17 @@ verify_settings() {
       printf 'Settings resolver expected=%s actual=%s action=%s\n' "$expected_component" "$RESOLVER_COMPONENT" "$settings_action" >&2
       settings_cleanup; return 1
     }
-    start_settings_action "$settings_action"
-    case "$route_kind:$SETTINGS_START_STATUS" in
-      shell:0) ;;
-      stock-menu:0)
-        stock_menu_settings_navigation "$settings_action" || { settings_cleanup; exit 1; }
-        ;;
-      stock-menu:*)
-        case "$SETTINGS_START_OUTPUT" in
-          *com.amazon.tv.permission.LAUNCHER_SETTINGS*) ;;
-          *) printf 'Settings direct launch did not show stock-menu permission denial: %s\n' "$settings_action" >&2; settings_cleanup; exit 1 ;;
-        esac
-        stock_menu_settings_navigation "$settings_action" || { settings_cleanup; exit 1; }
-        ;;
-      *)
+    if [ "$route_kind" = stock-menu ]; then
+      # On Fire OS, a shell action start can enter a looping compliance handler.
+      # The checked resolver plus visible stock-menu path are the actual proof.
+      stock_menu_settings_navigation "$settings_action" || { settings_cleanup; exit 1; }
+    else
+      start_settings_action "$settings_action"
+      [ "$route_kind:$SETTINGS_START_STATUS" = shell:0 ] || {
         printf 'Settings action could not be opened: %s\n' "$settings_action" >&2
         settings_cleanup; exit 1
-        ;;
-    esac
+      }
+    fi
     assert_settings_ui "$settings_action" "$expected_focus" || { settings_cleanup; exit 1; }
   done
   printf '%s\n' 'SETTINGS_ROUTES=PASS'
@@ -1113,18 +1188,15 @@ require_tcp_8009() {
 }
 
 capture_tun0_state() {
-  if tun0_output=$(adb_shell ip link show tun0); then
-    strip_one_trailing_cr "$tun0_output"
-    [ -n "$NORMALIZED" ] && GUARD_TUN0_STATE=present || GUARD_TUN0_STATE=absent
-  else
-    GUARD_TUN0_STATE=absent
-  fi
+  read_tun0_state || return 1
+  GUARD_TUN0_STATE=$TUN0_STATE
 }
 
 capture_guard_baseline() {
   case "$SERIAL" in *:5555) ;; *) [ -n "$NETWORK_SERIAL" ] || { printf '%s\n' 'USB primary requires --network-serial ending in :5555' >&2; return 1; } ;; esac
   require_network_target || return 1
   active_package_list || return 1
+  GUARD_BASELINE_ACTIVE_PACKAGES=$ACTIVE_PACKAGES
   require_preserved_active_packages "$ACTIVE_PACKAGES" || return 1
   require_wolf_ready || return 1
   read_guard_value bluetooth_on settings get global bluetooth_on || return 1
@@ -1163,7 +1235,7 @@ capture_guard_baseline() {
   GUARD_ALWAYS_ON_VPN_APP=$GUARD_VALUE
   read_guard_value always_on_vpn_lockdown settings get secure always_on_vpn_lockdown || return 1
   GUARD_ALWAYS_ON_VPN_LOCKDOWN=$GUARD_VALUE
-  capture_tun0_state
+  capture_tun0_state || return 1
   capture_home_resolver || return 1
   GUARD_HOME_RESOLVER_COMPONENT=$HOME_RESOLVER_COMPONENT
   require_tcp_8009 || return 1
@@ -1195,6 +1267,7 @@ load_guard_baseline() {
     printf '%s\n' 'baseline verification state is missing' >&2
     return 1
   }
+  load_baseline_active_packages "$baseline_dir" || return 1
   read_baseline_value "$baseline_file" bluetooth_on || return 1; GUARD_BLUETOOTH_ON=$BASELINE_VALUE
   read_baseline_value "$baseline_file" persist.sys.locale || return 1; GUARD_LOCALE=$BASELINE_VALUE
   read_baseline_value "$baseline_file" system_locales || return 1; GUARD_SYSTEM_LOCALES=$BASELINE_VALUE
@@ -1265,7 +1338,7 @@ compact_guard() {
   [ -n "$GUARD_VALUE" ] || { printf '%s\n' 'guard adbd is not running' >&2; return 1; }
   guard_unchanged_value always_on_vpn_app "$GUARD_ALWAYS_ON_VPN_APP" settings get secure always_on_vpn_app || return 1
   guard_unchanged_value always_on_vpn_lockdown "$GUARD_ALWAYS_ON_VPN_LOCKDOWN" settings get secure always_on_vpn_lockdown || return 1
-  capture_tun0_state
+  capture_tun0_state || return 1
   [ "$GUARD_TUN0_STATE" = "$GUARD_BASELINE_TUN0_STATE" ] || {
     printf 'guard changed tun0 presence expected=%s actual=%s\n' "$GUARD_BASELINE_TUN0_STATE" "$GUARD_TUN0_STATE" >&2
     return 1
@@ -1546,12 +1619,21 @@ apply() {
   journal_file=$backup_dir/operation-journal.txt
   : > "$journal_file"
   refresh_backup_checksums "$backup_dir" || exit 1
+  apply_total=$(awk 'END { print NR }' "$MANIFEST_DIR/remove-user0.txt")
+  apply_count=0
+  apply_progress() {
+    printf '%s\n' "$1"
+    if [ "${MANTIS_PROGRESS_FD:-}" = 3 ]; then printf '%s\n' "$1" >&3; fi
+  }
+  apply_progress "APPLY_PROGRESS=0/$apply_total"
   while IFS= read -r package; do
     capture_package_state "$package" || { rollback_batch '' "$removed_file" "$journal_file"; exit 1; }
     if ! package_list_contains "$PACKAGE_ENABLED" "$package"; then
       if package_list_contains "$PACKAGE_DISABLED" "$package"; then
         printf 'skip %s\n' "$package" >> "$journal_file"
         refresh_backup_checksums "$backup_dir" || exit 1
+        apply_count=$((apply_count + 1))
+        apply_progress "APPLY_PROGRESS=$apply_count/$apply_total package=$package skipped=already-disabled"
         continue
       fi
       rollback_batch '' "$removed_file" "$journal_file" || true
@@ -1612,6 +1694,8 @@ apply() {
       fi
       exit 1
     fi
+    apply_count=$((apply_count + 1))
+    apply_progress "APPLY_PROGRESS=$apply_count/$apply_total package=$apply_guard_package"
   done < "$MANIFEST_DIR/remove-user0.txt"
   printf 'APPLY_OUTPUT=%s\n' "$backup_dir"
   printf '%s\n' 'APPLY=PASS'
@@ -1652,12 +1736,6 @@ wolf_fail() {
   exit 1
 }
 
-wolf_badging_value() {
-  wolf_line=$1
-  wolf_key=$2
-  printf '%s\n' "$wolf_line" | sed -n "s/.*${wolf_key}='\\([^']*\\)'.*/\\1/p" | head -n 1
-}
-
 wolf_print_installed_identity() {
   wolf_package_dump=$1
   WOLF_INSTALLED_VERSION_CODE=$(printf '%s\n' "$wolf_package_dump" | sed -n 's/.*versionCode=\([0-9][0-9]*\).*/\1/p' | head -n 1)
@@ -1673,7 +1751,7 @@ install_wolf() {
   trap 'rm -rf "$WOLF_TMP"' EXIT HUP INT TERM
   wolf_apk=$WOLF_TMP/WolfLauncher_0.1.9-Wolf.apk
 
-  "$CURL" --fail --location --output "$wolf_apk" "$WOLF_URL" || wolf_fail 'download failed'
+  "$CURL" --fail --location --silent --show-error --connect-timeout 15 --max-time 180 --output "$wolf_apk" "$WOLF_URL" || wolf_fail 'download failed'
   wolf_bytes=$(wc -c < "$wolf_apk" | tr -d '[:space:]')
   [ "$wolf_bytes" = "$WOLF_SIZE" ] || wolf_fail "byte count expected=$WOLF_SIZE actual=$wolf_bytes"
   if [ -n "$SHA256_TOOL" ]; then
@@ -1687,14 +1765,14 @@ install_wolf() {
 
   wolf_badging=$("$AAPT" dump badging "$wolf_apk") || wolf_fail 'aapt badging inspection failed'
   wolf_package_line=$(printf '%s\n' "$wolf_badging" | sed -n '/^package: /p' | head -n 1)
-  wolf_package=$(wolf_badging_value "$wolf_package_line" name)
-  wolf_version_code=$(wolf_badging_value "$wolf_package_line" versionCode)
-  wolf_version_name=$(wolf_badging_value "$wolf_package_line" versionName)
+  wolf_package=$(apk_badging_value "$wolf_package_line" name)
+  wolf_version_code=$(apk_badging_value "$wolf_package_line" versionCode)
+  wolf_version_name=$(apk_badging_value "$wolf_package_line" versionName)
   wolf_min_sdk=$(printf '%s\n' "$wolf_badging" | sed -n "s/^sdkVersion:'\\([^']*\\)'.*/\\1/p" | head -n 1)
   wolf_target_sdk=$(printf '%s\n' "$wolf_badging" | sed -n "s/^targetSdkVersion:'\\([^']*\\)'.*/\\1/p" | head -n 1)
   wolf_install_location=$(printf '%s\n' "$wolf_badging" | sed -n "s/^install-location:'\\([^']*\\)'.*/\\1/p" | head -n 1)
   wolf_activity_line=$(printf '%s\n' "$wolf_badging" | sed -n '/^launchable-activity: /p' | head -n 1)
-  wolf_activity=$(wolf_badging_value "$wolf_activity_line" name)
+  wolf_activity=$(apk_badging_value "$wolf_activity_line" name)
   [ "$wolf_package" = "$WOLF_PACKAGE" ] || wolf_fail "package expected=$WOLF_PACKAGE actual=$wolf_package"
   [ "$wolf_version_code" = "$WOLF_VERSION_CODE" ] || wolf_fail "version code expected=$WOLF_VERSION_CODE actual=$wolf_version_code"
   [ "$wolf_version_name" = "$WOLF_VERSION_NAME" ] || wolf_fail "version name expected=$WOLF_VERSION_NAME actual=$wolf_version_name"

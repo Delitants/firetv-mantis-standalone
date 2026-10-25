@@ -7,8 +7,8 @@ Max. The scripts require Fire OS build `NS6711`, incremental
 root patch or package list on another build.
 
 The workflow uses **temporary, exec-only root**. It does not install `su` or
-provide root after a reboot, and permits one exploit attempt per boot. Package
-changes persist, so read the
+provide root after a reboot, and permits one exploit attempt per boot. The
+package changes are reversible, so read the
 [recovery guide](docs/RECOVERY.md) and keep its backup/journal files before
 running anything.
 
@@ -16,12 +16,13 @@ running anything.
 
 - Installs Wolf Launcher `0.1.9-Wolf` and Aurora Store `4.8.4` after checking
   their APKs.
-- Reversibly disables 30 listed packages for user 0. The root stage also
-  disables OTA, Appstore, the visible IMDb app, and stock Home components.
-  System APKs are not deleted.
+- Reversibly disables 30 listed packages for user 0. The root stage hides OTA,
+  Appstore, the visible IMDb app, and stock Home-starter for user 0, then
+  disables only the stock Home activity. System APKs are not deleted.
 - Makes Wolf the Home launcher while keeping stock Settings, Wi-Fi, Bluetooth,
   remote-control services, and USB/network ADB available.
-- Leaves TiviMate, WireGuard, and Sweet TV untouched.
+- Preserves TiviMate, WireGuard, and Sweet TV when installed; it does not
+  require or install missing ones.
 
 The exact [Wolf Launcher 0.1.9-Wolf APK](assets/WolfLauncher_0.1.9-Wolf.apk)
 is included for direct download. Its SHA-256 is
@@ -29,8 +30,8 @@ is included for direct download. Its SHA-256 is
 The deployment script still fetches and independently verifies the same pinned
 artifact from the original archive.
 
-See the [package lists](manifests/) and [recorded deployment
-state](docs/DEPLOYED-STATE.md) for exact scope and verification limits.
+See the [package lists](manifests/) and [recovery guide](docs/RECOVERY.md) for
+exact scope and rollback.
 
 ## 1. Build the temporary-root tool
 
@@ -53,7 +54,7 @@ it. The upstream source is not redistributed here.
 ## 2. Run the guarded deployment
 
 You need authorized **USB and network ADB connections to the same stick**, plus
-`adb`, `curl`, `aapt`, and `apksigner` on the host. From the
+`adb`, `curl`, `aapt`, `apksigner`, and Python 3 on the host. From the
 `firetv-mantis-standalone` directory, replace the placeholders below:
 
 ```sh
@@ -65,12 +66,19 @@ scripts/deploy-mantis.sh \
   --yes
 ```
 
-The script checks the exact device and both ADB connections before changing
-packages. It creates an audit and recovery backup, deploys the apps and
-debloat, reboots, then checks Home, Settings, protected apps, Wi-Fi, Bluetooth,
-and ADB again. **Keep the private output directory:** restoring protected
+The script checks the exact device, both ADB connections, and the exec-only
+root binary before changing packages. It creates an audit and recovery backup,
+deploys the apps and debloat, reboots, then checks Home, Settings, protected
+apps, Wi-Fi, Bluetooth, and ADB again. It prints the live log path and
+`PHASE=...` as it works; individual ADB calls and downloads are time-limited.
+A Settings check can still take a few minutes, while package changes print
+`APPLY_PROGRESS`. **Keep the private output directory:** restoring protected
 changes requires its root-action journal and another temporary-root session.
 See [recovery](docs/RECOVERY.md) if any check fails.
+
+The post-reboot check proves the Android Home intent opens Wolf. ADB key
+injection does not reproduce this model's physical remote Home button, so
+test that button directly before relying on it.
 
 ## Optional Settings tile
 
