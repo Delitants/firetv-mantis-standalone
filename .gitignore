@@ -5,6 +5,7 @@ settings-tile/build/
 settings-tile/dist/
 
 # Local publication material
+/.superpowers/
 /work/
 /outputs/
 /reports/
