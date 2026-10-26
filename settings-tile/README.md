@@ -7,8 +7,7 @@ top-level HUD also requires the privileged `INSTALL_PACKAGES` permission.
 This small app has no permissions or services. Its launcher activity starts
 the exported stock `com.amazon.tv.launcher/.ui.MainSettingsActivity` with
 `FLAG_ACTIVITY_CLEAR_TOP`, then finishes. The stock Home component can remain
-disabled. The default label is English; `values-uk` supplies the Ukrainian
-label on Ukrainian devices.
+disabled. The tile label is `Settings` in English.
 
 Build with Apktool 2.11.1 or a compatible version:
 
@@ -38,8 +37,7 @@ through the tile before relying on it.
 To keep the label on one line beneath the icon in Wolf Launcher 0.1.9,
 long-press the Settings tile, choose **Configure**, then set **Tile appearance →
 Type → Vertical**. This is a Wolf layout preference, not an APK resource change.
-The source's default label remains English (`Settings`); the optional Ukrainian
-translation is selected only when the device locale calls for it.
+The source label is English (`Settings`) on every device locale.
 
 Hiding the Downloads tiles in Wolf does not disable either Downloads package.
 Fire TV Settings → Applications → Manage Installed Applications still opens the

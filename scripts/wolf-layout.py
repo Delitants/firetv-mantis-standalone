@@ -16,6 +16,10 @@ import xml.etree.ElementTree as ET
 WOLF_PACKAGE = "com.wolf.firelauncher"
 HOME = WOLF_PACKAGE + "/.screens.launcher.LauncherActivity"
 BOUNDS = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
+SIDEBAR_HEADER = WOLF_PACKAGE + ":id/sidebar_header"
+SIDEBAR_ITEM = WOLF_PACKAGE + ":id/first_line"
+SIDEBAR_CHECKBOX = WOLF_PACKAGE + ":id/check_box"
+SECTION_TITLE = WOLF_PACKAGE + ":id/title"
 
 
 class LayoutError(Exception):
@@ -76,6 +80,32 @@ def rows(root, labels, width, right_only=True):
         if (not right_only or box[0] >= width * 0.64) and box[2] > box[0] and box[3] > box[1]:
             found.append((node.get("text"), box))
     return found
+
+
+def resource_rows(root, resource_id, width, right_only=True):
+    found = []
+    for node in root.iter("node"):
+        if node.get("package") != WOLF_PACKAGE or node.get("resource-id") != resource_id:
+            continue
+        match = BOUNDS.fullmatch(node.get("bounds", ""))
+        if not match:
+            continue
+        box = tuple(map(int, match.groups()))
+        if (not right_only or box[0] >= width * 0.64) and box[2] > box[0] and box[3] > box[1]:
+            found.append((node.get("text", ""), box))
+    return sorted(found, key=lambda row: (row[1][1], row[1][0]))
+
+
+def sidebar_open(root, width):
+    return bool(resource_rows(root, SIDEBAR_HEADER, width))
+
+
+def sidebar_items(root, width):
+    return resource_rows(root, SIDEBAR_ITEM, width)
+
+
+def checkbox_items(root, width):
+    return resource_rows(root, SIDEBAR_CHECKBOX, width)
 
 
 class Device:
@@ -148,9 +178,7 @@ class Device:
         self.frame()
         for _ in range(4):
             root = self.ui()
-            if not rows(root, ("Hidden Apps", "Приховані плитки", "Sections", "Розділи",
-                               "Show Section", "Visible", "Видимий", "Launcher Settings",
-                               "Інше", "Other Settings"), self.width):
+            if not sidebar_open(root, self.width):
                 return root
             self.shell("input", "keyevent", "4")
             time.sleep(0.3)
@@ -162,27 +190,27 @@ class Device:
         time.sleep(0.4)
         self.frame()
         root = self.ui()
-        if not (rows(root, ("Hidden Apps", "Приховані плитки"), self.width) and
-                rows(root, ("Sections", "Розділи"), self.width)):
-            choices = rows(root, ("Launcher Settings", "Інше"), self.width)
-            if len(choices) != 1:
-                raise LayoutError("Wolf Application Menu did not expose Launcher Settings")
-            self.tap(choices[0][1])
+        if not sidebar_open(root, self.width):
+            raise LayoutError("Wolf Application Menu did not open")
+        items = sidebar_items(root, self.width)
+        if len(items) == 9 and not checkbox_items(root, self.width):
+            # Pinned Wolf 0.1.9: Launcher Settings precedes Android and Other Settings.
+            self.tap(items[-3][1])
+        elif len(items) != 4 or checkbox_items(root, self.width):
+            raise LayoutError("unexpected Wolf Application Menu layout")
         for _ in range(3):
             root = self.ui()
-            if rows(root, ("Hidden Apps", "Приховані плитки"), self.width) and rows(
-                root, ("Sections", "Розділи"), self.width
-            ):
+            if sidebar_open(root, self.width) and len(sidebar_items(root, self.width)) == 4 and not checkbox_items(root, self.width):
                 return
             time.sleep(0.4)
         raise LayoutError("Wolf Launcher Settings menu did not open")
 
     def open_hidden(self):
         self.open_settings()
-        self.click_label("Hidden Apps", "Приховані плитки")
+        self.tap(sidebar_items(self.ui(), self.width)[2][1])
         self.frame()
         root = self.ui()
-        if not rows(root, ("Hidden Tiles", "Приховані плитки"), self.width):
+        if not sidebar_open(root, self.width) or not checkbox_items(root, self.width):
             raise LayoutError("Wolf Hidden Tiles did not open")
         # Restore the alphabetical list to its start before each target.
         for _ in range(5):
@@ -278,9 +306,10 @@ class Device:
 
     def applications_top(self):
         root = self.open_home()
-        candidates = rows(root, ("Applications", "Застосунки", "Додатки"), self.width, right_only=False)
+        candidates = [row for row in resource_rows(root, SECTION_TITLE, self.width, right_only=False)
+                      if row[1][0] < self.width * 0.2 and row[1][2] - row[1][0] > self.width * 0.7]
         if len(candidates) != 1:
-            raise LayoutError("Wolf Applications section title is not uniquely visible")
+            raise LayoutError("Wolf primary section title is not uniquely visible")
         return candidates[0][1][1]
 
     def hide_empty_widgets(self):
@@ -289,9 +318,19 @@ class Device:
             print("WOLF_WIDGET_GAP=PASS already-closed")
             return
         self.open_settings()
-        self.click_label("Sections", "Розділи")
-        self.click_label("Widgets", "Віджети")
-        self.click_label("Show Section", "Visible", "Видимий")
+        self.tap(sidebar_items(self.ui(), self.width)[0][1])
+        section_items = sidebar_items(self.ui(), self.width)
+        if len(section_items) != 3:
+            raise LayoutError("Wolf Sections menu layout changed")
+        widgets = [row for row in section_items if row[0] == "Widgets"]
+        if len(widgets) != 1:
+            raise LayoutError("Wolf Widgets section was not identifiable")
+        self.tap(widgets[0][1])
+        options = sidebar_items(self.ui(), self.width)
+        checks = checkbox_items(self.ui(), self.width)
+        if len(options) < 3 or not checks or not (options[0][1][1] <= checks[0][1][1] <= options[0][1][3]):
+            raise LayoutError("Wolf Widgets visibility control was not identifiable")
+        self.tap(options[0][1])
         # Wolf applies section changes when the dialog closes with Back.
         self.shell("input", "keyevent", "4")
         time.sleep(0.3)

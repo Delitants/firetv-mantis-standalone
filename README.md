@@ -134,5 +134,4 @@ test that button directly before relying on it.
 The deployment script does **not** install the separate Settings tile. Its
 [source and build/sign instructions](settings-tile/README.md) are provided for
 Wolf Launcher users who want a direct tile for the stock Fire TV Settings
-screen. The default label is English; Ukrainian is an optional locale
-translation. No signed APK or signing key is published here.
+screen. Its label is English. No signed APK or signing key is published here.

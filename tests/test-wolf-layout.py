@@ -14,14 +14,19 @@ SPEC.loader.exec_module(WOLF)
 
 
 class WolfLayoutTests(unittest.TestCase):
+    def test_public_launcher_has_no_locale_specific_labels(self):
+        self.assertNotRegex((ROOT / "scripts/wolf-layout.py").read_text(), r"[\u0400-\u04ff]")
+        self.assertFalse((ROOT / "settings-tile/res/values-uk/strings.xml").exists())
+
     def test_opens_launcher_settings_from_application_menu(self):
         class MenuDevice(WOLF.Device):
-            def __init__(self, launcher_label):
+            def __init__(self, menu_count=9):
                 super().__init__("fake-adb", "usb-primary")
                 self.width, self.height = 1920, 1080
                 self.screen = "home"
-                self.launcher_label = launcher_label
+                self.menu_count = menu_count
                 self.calls = []
+                self.widgets_hidden = False
 
             def shell(self, *args):
                 self.calls.append(args)
@@ -33,6 +38,13 @@ class WolfLayoutTests(unittest.TestCase):
                     self.screen = "application-menu"
                 elif args[:2] == ("input", "tap") and self.screen == "application-menu":
                     self.screen = "launcher-settings" if 578 <= int(args[3]) <= 655 else "other-settings"
+                elif args[:2] == ("input", "tap") and self.screen == "launcher-settings":
+                    y = int(args[3])
+                    self.screen = "sections" if y < 190 else "hidden-list" if 270 <= y <= 350 else "other-settings"
+                elif args[:2] == ("input", "tap") and self.screen == "sections":
+                    self.screen = "widget-dialog" if 270 <= int(args[3]) <= 350 else "other-settings"
+                elif args[:2] == ("input", "tap") and self.screen == "widget-dialog":
+                    self.widgets_hidden = 470 <= int(args[3]) <= 520
                 elif args == ("input", "keyevent", "4"):
                     self.screen = "home"
                 return ""
@@ -42,25 +54,38 @@ class WolfLayoutTests(unittest.TestCase):
 
             def ui(self):
                 if self.screen == "application-menu":
-                    xml = f'<hierarchy><node package="com.wolf.firelauncher" text="Application Menu" bounds="[1338,0][1900,115]"/><node package="com.wolf.firelauncher" text="{self.launcher_label}" bounds="[1348,578][1750,655]"/><node package="com.wolf.firelauncher" text="Other Settings" bounds="[1348,730][1750,809]"/></hierarchy>'
+                    count = self.menu_count
                 elif self.screen == "launcher-settings":
-                    xml = '<hierarchy><node package="com.wolf.firelauncher" text="Sections" bounds="[1348,116][1750,193]"/><node package="com.wolf.firelauncher" text="Hidden Apps" bounds="[1348,270][1750,346]"/></hierarchy>'
+                    count = 4
+                elif self.screen == "sections":
+                    count = 3
+                elif self.screen in ("widget-dialog", "hidden-list"):
+                    count = 3
                 elif self.screen == "other-settings":
-                    xml = '<hierarchy><node package="com.wolf.firelauncher" text="Other Settings" bounds="[1338,0][1900,115]"/></hierarchy>'
+                    count = 5
                 else:
-                    xml = '<hierarchy><node package="com.wolf.firelauncher" text="Applications" bounds="[93,215][1827,264]"/></hierarchy>'
+                    top = 215 if self.widgets_hidden else 347
+                    return ET.fromstring(f'<hierarchy><node package="com.wolf.firelauncher" resource-id="com.wolf.firelauncher:id/title" text="Any section name" bounds="[93,{top}][1827,{top+49}]"/></hierarchy>')
+                offset = 470 if self.screen == "widget-dialog" else 130
+                items = ''.join(f'<node package="com.wolf.firelauncher" resource-id="com.wolf.firelauncher:id/first_line" text="{("Widgets" if self.screen == "sections" and i == 2 else "Item " + str(i))}" bounds="[1348,{offset+77*i}][1891,{offset+49+77*i}]"/>' for i in range(count))
+                checks = '<node package="com.wolf.firelauncher" resource-id="com.wolf.firelauncher:id/check_box" bounds="[1745,476][1781,512]"/>' if self.screen in ("widget-dialog", "hidden-list") else ''
+                xml = '<hierarchy><node package="com.wolf.firelauncher" resource-id="com.wolf.firelauncher:id/sidebar_header" bounds="[1308,0][1920,116]"/>' + items + checks + '</hierarchy>'
                 return ET.fromstring(xml)
 
-        for label in ("Launcher Settings", "Інше"):
-            with self.subTest(label=label):
-                device = MenuDevice(label)
-                device.open_settings()
-                self.assertEqual(device.screen, "launcher-settings")
-                self.assertIn(("input", "keyevent", "82"), device.calls)
-                self.assertNotIn(("am", "start", "-n", "com.wolf.firelauncher/.screens.launcher.SettingsActivity"), device.calls)
+        device = MenuDevice()
+        device.open_settings()
+        self.assertEqual(device.screen, "launcher-settings")
+        self.assertIn(("input", "keyevent", "82"), device.calls)
+        self.assertNotIn(("am", "start", "-n", "com.wolf.firelauncher/.screens.launcher.SettingsActivity"), device.calls)
+        self.assertEqual(device.applications_top(), 347)
+        device.hide_empty_widgets()
+        self.assertTrue(device.widgets_hidden)
+        self.assertEqual(device.applications_top(), 215)
+        device.open_hidden()
+        self.assertEqual(device.screen, "hidden-list")
 
-        device = MenuDevice("Missing launcher entry")
-        with self.assertRaisesRegex(WOLF.LayoutError, "did not expose Launcher Settings"):
+        device = MenuDevice(menu_count=8)
+        with self.assertRaisesRegex(WOLF.LayoutError, "unexpected Wolf Application Menu"):
             device.open_settings()
         self.assertEqual(device.screen, "application-menu")
         self.assertFalse(any(call[:2] == ("input", "tap") for call in device.calls))
