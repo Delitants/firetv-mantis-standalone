@@ -14,6 +14,57 @@ SPEC.loader.exec_module(WOLF)
 
 
 class WolfLayoutTests(unittest.TestCase):
+    def test_opens_launcher_settings_from_application_menu(self):
+        class MenuDevice(WOLF.Device):
+            def __init__(self, launcher_label):
+                super().__init__("fake-adb", "usb-primary")
+                self.width, self.height = 1920, 1080
+                self.screen = "home"
+                self.launcher_label = launcher_label
+                self.calls = []
+
+            def shell(self, *args):
+                self.calls.append(args)
+                if args == ("am", "start", "-n", WOLF.HOME):
+                    self.screen = "home"
+                elif args == ("am", "start", "-n", "com.wolf.firelauncher/.screens.launcher.SettingsActivity"):
+                    self.screen = "other-settings"
+                elif args == ("input", "keyevent", "82") and self.screen == "home":
+                    self.screen = "application-menu"
+                elif args[:2] == ("input", "tap") and self.screen == "application-menu":
+                    self.screen = "launcher-settings" if 578 <= int(args[3]) <= 655 else "other-settings"
+                elif args == ("input", "keyevent", "4"):
+                    self.screen = "home"
+                return ""
+
+            def frame(self):
+                return None
+
+            def ui(self):
+                if self.screen == "application-menu":
+                    xml = f'<hierarchy><node package="com.wolf.firelauncher" text="Application Menu" bounds="[1338,0][1900,115]"/><node package="com.wolf.firelauncher" text="{self.launcher_label}" bounds="[1348,578][1750,655]"/><node package="com.wolf.firelauncher" text="Other Settings" bounds="[1348,730][1750,809]"/></hierarchy>'
+                elif self.screen == "launcher-settings":
+                    xml = '<hierarchy><node package="com.wolf.firelauncher" text="Sections" bounds="[1348,116][1750,193]"/><node package="com.wolf.firelauncher" text="Hidden Apps" bounds="[1348,270][1750,346]"/></hierarchy>'
+                elif self.screen == "other-settings":
+                    xml = '<hierarchy><node package="com.wolf.firelauncher" text="Other Settings" bounds="[1338,0][1900,115]"/></hierarchy>'
+                else:
+                    xml = '<hierarchy><node package="com.wolf.firelauncher" text="Applications" bounds="[93,215][1827,264]"/></hierarchy>'
+                return ET.fromstring(xml)
+
+        for label in ("Launcher Settings", "Інше"):
+            with self.subTest(label=label):
+                device = MenuDevice(label)
+                device.open_settings()
+                self.assertEqual(device.screen, "launcher-settings")
+                self.assertIn(("input", "keyevent", "82"), device.calls)
+                self.assertNotIn(("am", "start", "-n", "com.wolf.firelauncher/.screens.launcher.SettingsActivity"), device.calls)
+
+        device = MenuDevice("Missing launcher entry")
+        with self.assertRaisesRegex(WOLF.LayoutError, "did not expose Launcher Settings"):
+            device.open_settings()
+        self.assertEqual(device.screen, "application-menu")
+        self.assertFalse(any(call[:2] == ("input", "tap") for call in device.calls))
+
     def test_raw_screencap_and_visibility_colors(self):
         pixels = bytes((0, 161, 29, 255, 255, 255, 255, 255, 18, 174, 245, 255))
         frame = WOLF.RawFrame(struct.pack("<III", 3, 1, 1) + pixels)

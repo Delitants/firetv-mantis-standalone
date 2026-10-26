@@ -15,7 +15,6 @@ import xml.etree.ElementTree as ET
 
 WOLF_PACKAGE = "com.wolf.firelauncher"
 HOME = WOLF_PACKAGE + "/.screens.launcher.LauncherActivity"
-SETTINGS = WOLF_PACKAGE + "/.screens.launcher.SettingsActivity"
 BOUNDS = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
 
 
@@ -150,25 +149,33 @@ class Device:
         for _ in range(4):
             root = self.ui()
             if not rows(root, ("Hidden Apps", "Приховані плитки", "Sections", "Розділи",
-                               "Show Section", "Visible", "Видимий"), self.width):
+                               "Show Section", "Visible", "Видимий", "Launcher Settings",
+                               "Інше", "Other Settings"), self.width):
                 return root
             self.shell("input", "keyevent", "4")
             time.sleep(0.3)
         raise LayoutError("Wolf Settings sidebar remained open over Home")
 
     def open_settings(self):
-        self.shell("am", "start", "-n", SETTINGS)
-        time.sleep(0.6)
+        self.open_home()
+        self.shell("input", "keyevent", "82")
+        time.sleep(0.4)
         self.frame()
-        for _ in range(4):
+        root = self.ui()
+        if not (rows(root, ("Hidden Apps", "Приховані плитки"), self.width) and
+                rows(root, ("Sections", "Розділи"), self.width)):
+            choices = rows(root, ("Launcher Settings", "Інше"), self.width)
+            if len(choices) != 1:
+                raise LayoutError("Wolf Application Menu did not expose Launcher Settings")
+            self.tap(choices[0][1])
+        for _ in range(3):
             root = self.ui()
             if rows(root, ("Hidden Apps", "Приховані плитки"), self.width) and rows(
                 root, ("Sections", "Розділи"), self.width
             ):
                 return
-            self.shell("input", "keyevent", "4")
-            time.sleep(0.3)
-        raise LayoutError("Wolf Settings menu did not open")
+            time.sleep(0.4)
+        raise LayoutError("Wolf Launcher Settings menu did not open")
 
     def open_hidden(self):
         self.open_settings()
