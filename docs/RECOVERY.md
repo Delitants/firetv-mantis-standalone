@@ -1,5 +1,21 @@
 # Recovery-first operation
 
+For deployment, `--serial` must be an authorized physical USB ADB connection
+shown with `usb:` in `adb devices -l`; `--network-serial` must be the same
+stick's separate `IP:5555` connection. If preflight reports a missing core
+package, including `com.amazon.dp.logger`, restore its original enabled state
+before deployment. The script will not enable it for you.
+
+If debloat stops and says rollback is incomplete, save the entire checksummed
+backup directory. Reconnect both ADB transports and run the backup's
+`restore-user0.sh`; do not rerun deployment on that partial state. Restore
+keeps ledger entries until package state and all guards can be checked.
+
+```sh
+SERIAL=USB_SERIAL NETWORK_SERIAL=DEVICE_IP:5555 \
+  /path/to/private-backup/deployment-TIMESTAMP/debloat-backup/restore-user0.sh
+```
+
 Before `apply`, run an audit, retain its output directory, read
 `restore-user0.sh`, and establish a tested rollback path. Then run:
 

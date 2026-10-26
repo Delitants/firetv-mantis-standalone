@@ -17,6 +17,7 @@ CR=$(printf '\r')
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 MANIFEST_DIR=$SCRIPT_DIR/../manifests
 . "$SCRIPT_DIR/apk-badging.sh"
+. "$SCRIPT_DIR/adb-transport.sh"
 
 usage() {
   printf '%s\n' 'usage: mantis-tool.sh [--adb PATH] [--curl PATH] [--aapt PATH] [--apksigner PATH] [--sha256 PATH] --serial SERIAL [--network-serial SERIAL:5555] [--baseline AUDIT_DIRECTORY] [--output DIR] [--yes] audit|plan|apply|install-wolf|restore BACKUP_DIRECTORY|verify|verify-settings' >&2
@@ -1353,17 +1354,29 @@ compact_guard() {
 
 rollback_recorded_packages() {
   removed_file=$1
+  rollback_mode=${2:-strict}
   backup_dir=$(dirname "$removed_file")
   restore_journal=$backup_dir/restore-journal.txt
   rollback_file=$(mktemp "${TMPDIR:-/tmp}/mantis-rollback.XXXXXX") || return 1
   awk '{ lines[NR] = $0 } END { for (line = NR; line > 0; line--) print lines[line] }' "$removed_file" > "$rollback_file"
   rollback_ok=yes
+  rollback_defer_guard=no
   while IFS= read -r rollback_package; do
     [ -n "$rollback_package" ] || continue
     recorded_package_exists "$removed_file" "$rollback_package" || continue
-    if ! restore_recorded_package "$backup_dir" "$rollback_package"; then
+    rollback_result=0
+    if [ "$rollback_mode" = apply ] && [ "$rollback_defer_guard" = yes ]; then
+      restore_recorded_package "$backup_dir" "$rollback_package" deferred || rollback_result=$?
+    else
+      restore_recorded_package "$backup_dir" "$rollback_package" || rollback_result=$?
+    fi
+    if [ "$rollback_result" -ne 0 ]; then
       printf 'rollback failed for %s\n' "$rollback_package" >&2
       rollback_ok=no
+      if [ "$rollback_mode" = apply ] && [ "$rollback_result" -eq 2 ]; then
+        rollback_defer_guard=yes
+        continue
+      fi
       break
     fi
   done < "$rollback_file"
@@ -1382,7 +1395,7 @@ rollback_batch() {
       restore_recorded_package "$(dirname "$removed_file")" "$failed_package" || rollback_ok=no
     fi
   fi
-  rollback_recorded_packages "$removed_file" || rollback_ok=no
+  rollback_recorded_packages "$removed_file" apply || rollback_ok=no
   [ "$rollback_ok" = yes ]
 }
 
@@ -1444,6 +1457,7 @@ append_restore_record() {
 restore_recorded_package() {
   backup_dir=$1
   restore_target=$2
+  restore_guard_mode=${3:-full}
   removed_file=$backup_dir/disabled-successfully.txt
   capture_package_state "$restore_target" || return 1
   if package_list_contains "$PACKAGE_ENABLED" "$restore_target" ||
@@ -1462,9 +1476,13 @@ restore_recorded_package() {
     append_restore_record "$backup_dir" failure "$restore_target" || return 1
     return 1
   fi
+  if [ "$restore_guard_mode" = deferred ]; then
+    append_restore_record "$backup_dir" guard-deferred "$restore_target" || return 1
+    return 2
+  fi
   if ! compact_guard; then
-    append_restore_record "$backup_dir" guard-failure "$restore_target" || true
-    return 1
+    append_restore_record "$backup_dir" guard-failure "$restore_target" || return 1
+    return 2
   fi
   remove_recorded_package "$removed_file" "$restore_target"
 }
@@ -1559,7 +1577,7 @@ validate_restore_journal() {
     [ -n "$journal_state" ] || continue
     [ -z "${journal_extra:-}" ] || { printf '%s\n' 'invalid restore journal record' >&2; return 1; }
     case "$journal_state" in
-      attempt|success|success-after-error|failure|guard-failure|reconciled-enabled) ;;
+      attempt|success|success-after-error|failure|guard-failure|guard-deferred|reconciled-enabled) ;;
       *) printf 'invalid restore journal state: %s\n' "$journal_state" >&2; return 1 ;;
     esac
     validate_recorded_package "$journal_package" || {
@@ -1606,6 +1624,7 @@ plan() {
 }
 
 apply() {
+  require_usb_primary "$ADB" "$SERIAL" "$NETWORK_SERIAL" || exit 1
   require_target
   validate_manifests
   require_package_state_capability

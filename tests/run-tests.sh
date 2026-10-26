@@ -7,6 +7,9 @@ sh "$SOURCE_ROOT/tests/test-root-binary-identity.sh"
 sh "$SOURCE_ROOT/tests/test-hud-focus-retry.sh"
 sh "$SOURCE_ROOT/tests/test-settings-grid-focus.sh"
 sh "$SOURCE_ROOT/tests/test-tun0-probe.sh"
+sh "$SOURCE_ROOT/tests/test-usb-primary.sh"
+sh "$SOURCE_ROOT/tests/test-core-preflight.sh"
+sh "$SOURCE_ROOT/tests/test-network-loss-rollback.sh"
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mantis-tool-tests.XXXXXX")
 ROOT="$TEST_TMP/repository"
 cp -R "$SOURCE_ROOT" "$ROOT"
@@ -103,7 +106,11 @@ refresh_checksums() {
 
 run_tool() {
   : > "$FAKE_ADB_LOG"
-  if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 "$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
+  tool_serial=test-host:5555
+  tool_network_serial=test-host:5555
+  case "$*" in *' apply') tool_serial=usb-primary; tool_network_serial=network-check:5555 ;; esac
+  if "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial "$tool_serial" \
+    --network-serial "$tool_network_serial" "$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err"; then
     STATUS=0
   else
     STATUS=$?
@@ -142,7 +149,8 @@ run_verify_settings() {
 
 run_tool_interrupted() {
   : > "$FAKE_ADB_LOG"
-  "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial test-host:5555 "$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err" &
+  "$ROOT/scripts/mantis-tool.sh" --adb "$ROOT/tests/fixtures/adb" --serial usb-primary \
+    --network-serial network-check:5555 "$@" >"$TEST_TMP/out" 2>"$TEST_TMP/err" &
   TOOL_PID=$!
   wait_count=0
   while [ ! -e "$FAKE_INTERRUPT_MARKER" ] && [ "$wait_count" -lt 50 ]; do

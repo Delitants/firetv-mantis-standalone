@@ -57,6 +57,12 @@ You need authorized **USB and network ADB connections to the same stick**, plus
 `adb`, `curl`, `aapt`, `apksigner`, and Python 3 on the host. From the
 `firetv-mantis-standalone` directory, replace the placeholders below:
 
+Use the physical USB device shown as `device` with `usb:` in `adb devices -l`
+for `--serial`. Use the stick's separate `IP:5555` connection for
+`--network-serial`. The script stops before app installation if USB is missing
+or a protected core package such as `com.amazon.dp.logger` is not enabled;
+restore that package's baseline before trying deployment.
+
 ```sh
 scripts/deploy-mantis.sh \
   --serial USB_SERIAL \
@@ -75,6 +81,14 @@ A Settings check can still take a few minutes, while package changes print
 `APPLY_PROGRESS`. **Keep the private output directory:** restoring protected
 changes requires its root-action journal and another temporary-root session.
 See [recovery](docs/RECOVERY.md) if any check fails.
+If rollback reports an incomplete backup, keep that directory and use its
+`restore-user0.sh` once both ADB connections work. Do not rerun deployment over
+the partial state. For example:
+
+```sh
+SERIAL=USB_SERIAL NETWORK_SERIAL=DEVICE_IP:5555 \
+  /path/to/private-backup/deployment-TIMESTAMP/debloat-backup/restore-user0.sh
+```
 
 The post-reboot check proves the Android Home intent opens Wolf. ADB key
 injection does not reproduce this model's physical remote Home button, so

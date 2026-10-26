@@ -10,6 +10,16 @@ if [ "${FAKE_ADB_DRAIN_STDIN:-no}" = yes ]; then
   while IFS= read -r ignored_stdin_line; do :; done
 fi
 
+if [ "${1:-}" = devices ] && [ "${2:-}" = -l ] && [ "$#" -eq 2 ]; then
+  printf '%s\n' 'List of devices attached'
+  if [ "${FAKE_ADB_USB_PRESENT:-yes}" = yes ]; then
+    printf 'usb-primary\t%s usb:1-10 product:mantis model:AFTMM device:mantis\n' "${FAKE_ADB_USB_STATE:-device}"
+  fi
+  printf '%s\n' 'network-check:5555 device product:mantis model:AFTMM device:mantis'
+  printf '%s\n' 'test-host:5555 device product:mantis model:AFTMM device:mantis'
+  exit 0
+fi
+
 if [ "$1" != "-s" ] || [ -z "${2:-}" ]; then
   printf '%s\n' 'fake adb requires -s SERIAL' >&2
   exit 64
@@ -17,14 +27,32 @@ fi
 fake_serial=$2
 shift 2
 
+fake_transport_offline=no
+if [ -n "${FAKE_PACKAGE_STATE:-}" ] && [ -f "$FAKE_PACKAGE_STATE" ]; then
+  if [ "$fake_serial" = network-check:5555 ] && [ -n "${FAKE_NETWORK_DROP_AFTER_DISABLED_COUNT:-}" ] &&
+    awk -v limit="$FAKE_NETWORK_DROP_AFTER_DISABLED_COUNT" '$1 == "disabled" { count++ } END { exit !(count >= limit) }' "$FAKE_PACKAGE_STATE"
+  then : > "$FAKE_PACKAGE_STATE.network-dropped"; fi
+  if [ "$fake_serial" = usb-primary ] && [ -n "${FAKE_USB_DROP_AFTER_DISABLED_COUNT:-}" ] &&
+    awk -v limit="$FAKE_USB_DROP_AFTER_DISABLED_COUNT" '$1 == "disabled" { count++ } END { exit !(count >= limit) }' "$FAKE_PACKAGE_STATE"
+  then : > "$FAKE_PACKAGE_STATE.usb-dropped"; fi
+  if [ "$fake_serial" = network-check:5555 ] && [ -e "$FAKE_PACKAGE_STATE.network-dropped" ]; then fake_transport_offline=yes; fi
+  if [ "$fake_serial" = usb-primary ] && [ -e "$FAKE_PACKAGE_STATE.usb-dropped" ]; then fake_transport_offline=yes; fi
+fi
+
 if [ "$1" = get-state ]; then
   [ "$#" -eq 1 ] || { printf '%s\n' 'invalid fake adb get-state command' >&2; exit 64; }
+  if [ "$fake_transport_offline" = yes ]; then printf '%s\n' offline; exit 0; fi
   if [ "$fake_serial" = network-check:5555 ]; then
     printf '%s\n' "${FAKE_NETWORK_ADB_STATE:-device}"
   else
     printf '%s\n' "${FAKE_ADB_STATE:-device}"
   fi
   exit 0
+fi
+
+if [ "$fake_transport_offline" = yes ]; then
+  printf '%s\n' 'error: device offline' >&2
+  exit 1
 fi
 
 if [ "$1" = install ]; then
@@ -194,6 +222,7 @@ case "$1" in
       ro.product.device) value=${FAKE_DEVICE:-mantis} ;;
       ro.build.id) value=${FAKE_BUILD_ID:-NS6711} ;;
       ro.build.version.incremental) value=${FAKE_INCREMENTAL:-0011644900484} ;;
+      ro.build.fingerprint) value=${FAKE_FINGERPRINT:-Amazon/mantis/mantis:6.0/NS6711/5908N:user/amz-p,release-keys} ;;
       ro.build.version.release) value=${FAKE_RELEASE:-7.1.2} ;;
       ro.build.version.sdk) value=${FAKE_SDK:-25} ;;
       ro.product.cpu.abi) value=${FAKE_ABI:-armeabi-v7a} ;;
@@ -357,7 +386,7 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
     esac
     ;;
   uname)
-    value=${FAKE_UNAME:-armv7l}
+    if [ "${2:-}" = -r ]; then value=${FAKE_UNAME_RELEASE:-4.4.120+}; else value=${FAKE_UNAME:-armv7l}; fi
     ;;
   getenforce)
     value=${FAKE_ENFORCE:-Enforcing}

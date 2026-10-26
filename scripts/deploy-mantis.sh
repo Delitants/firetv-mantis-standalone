@@ -4,6 +4,7 @@ set -eu
 HERE=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$HERE/.." && pwd)
 . "$HERE/apk-badging.sh"
+. "$HERE/adb-transport.sh"
 ADB=adb
 CURL=curl
 AAPT=aapt
@@ -83,6 +84,7 @@ expect_prop() {
 }
 
 target_gate() {
+  require_usb_primary "$ADB" "$SERIAL" "$NETWORK_SERIAL" || fail 'USB primary transport is required'
   [ "$(adb_cmd get-state | tr -d '\r')" = device ] || fail 'primary ADB transport is unavailable'
   [ "$(network_adb_cmd get-state | tr -d '\r')" = device ] || fail 'network ADB transport is unavailable'
   expect_prop ro.product.manufacturer Amazon
@@ -99,6 +101,25 @@ target_gate() {
   network_identity=$(network_adb_cmd shell getprop ro.serialno | tr -d '\r')
   [ -n "$primary_identity" ] && [ "$primary_identity" = "$network_identity" ] || fail 'USB/network device identity mismatch'
   printf '%s\n' 'TARGET_GATE=PASS'
+}
+
+preflight_core_packages() {
+  audit_dir=$1
+  if ! (
+    cd "$audit_dir"
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum -c SHA256SUMS >/dev/null
+    else shasum -a 256 -c SHA256SUMS >/dev/null; fi
+  ); then
+    fail 'preflight audit checksum verification failed'
+  fi
+  enabled_packages=$audit_dir/packages-enabled.txt
+  while IFS= read -r required_package; do
+    if ! grep -Fqx "package:$required_package" "$enabled_packages"; then
+      printf 'PREFLIGHT_CORE_MISSING=%s\n' "$required_package"
+      fail 'restore the missing protected package before deployment'
+    fi
+  done < "$ROOT_DIR/manifests/preserve-core.txt"
+  printf '%s\n' 'PREFLIGHT_CORE=PASS'
 }
 
 install_aurora() {
@@ -214,6 +235,7 @@ python3 "$HERE/check-root-binary.py" "$ROOT_BINARY" || fail 'root binary identit
 TOOL=$HERE/mantis-tool.sh
 announce_phase PREFLIGHT_AUDIT
 "$TOOL" --adb "$ADB" --serial "$SERIAL" --network-serial "$NETWORK_SERIAL" --output "$RUN_DIR/preflight-audit" audit
+preflight_core_packages "$RUN_DIR/preflight-audit"
 announce_phase SETTINGS_PREFLIGHT
 "$TOOL" --adb "$ADB" --serial "$SERIAL" verify-settings
 announce_phase ROOT_STAGING
