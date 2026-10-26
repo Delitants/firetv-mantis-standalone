@@ -51,6 +51,16 @@ if grep -Eq ' install | pm disable-user | pm enable ' "$test_dir/missing-logger/
   exit 1
 fi
 
+run_case missing-screensaver com.amazon.ftv.screensaver
+grep -Fq 'PREFLIGHT_CORE_MISSING=com.amazon.ftv.screensaver' "$deploy_log" || {
+  printf '%s\n' 'FAIL: missing screensaver was not identified before app installation' >&2
+  exit 1
+}
+if grep -Eq 'PHASE=(ROOT_STAGING|WOLF_INSTALL|AURORA_INSTALL|DEBLOAT_APPLY)' "$deploy_log"; then
+  printf '%s\n' 'FAIL: missing screensaver passed the deployment preflight' >&2
+  exit 1
+fi
+
 run_case complete-baseline none
 grep -Fq 'PREFLIGHT_CORE=PASS' "$deploy_log" || {
   printf '%s\n' 'FAIL: complete core baseline did not pass its preflight' >&2

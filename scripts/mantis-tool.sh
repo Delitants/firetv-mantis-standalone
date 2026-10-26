@@ -649,6 +649,13 @@ require_preserved_active_packages() {
     return 1
   }
   while IFS= read -r required_package; do
+    if [ "$required_package" = com.amazon.ftv.screensaver ] &&
+      [ "${LEGACY_SCREENSAVER_RESTORE:-no}" = yes ] &&
+      { ! package_list_contains "$GUARD_BASELINE_ACTIVE_PACKAGES" "$required_package" ||
+        recorded_package_exists "$LEGACY_RESTORE_LEDGER" "$required_package"; }
+    then
+      continue
+    fi
     package_list_contains "$active_packages" "$required_package" || {
       printf 'guard missing enabled package: %s\n' "$required_package" >&2
       return 1
@@ -1411,6 +1418,10 @@ validate_recorded_package() {
   case "$recorded_candidate" in
     ''|*[!A-Za-z0-9._]*) return 1 ;;
   esac
+  if [ "$recorded_candidate" = com.amazon.ftv.screensaver ] &&
+    [ "${LEGACY_SCREENSAVER_RESTORE:-no}" = yes ]; then
+    return 0
+  fi
   script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
   awk -v package="$recorded_candidate" '$0 == package { found = 1 } END { exit found ? 0 : 1 }' "$MANIFEST_DIR/remove-user0.txt"
 }
@@ -1724,6 +1735,13 @@ restore_backup() {
   backup_dir=$COMMAND_ARG
   verify_backup_integrity "$backup_dir" || { printf '%s\n' 'backup integrity verification failed' >&2; exit 1; }
   validate_backup_mode "$backup_dir" || exit 1
+  [ -f "$backup_dir/protected-apps.txt" ] && [ ! -L "$backup_dir/protected-apps.txt" ] ||
+    { printf '%s\n' 'backup protected-apps inventory is missing' >&2; exit 1; }
+  LEGACY_SCREENSAVER_RESTORE=no
+  if ! grep -Fqx com.amazon.ftv.screensaver "$backup_dir/protected-apps.txt"; then
+    LEGACY_SCREENSAVER_RESTORE=yes
+    LEGACY_RESTORE_LEDGER=$backup_dir/disabled-successfully.txt
+  fi
   require_target
   validate_manifests
   require_package_state_capability

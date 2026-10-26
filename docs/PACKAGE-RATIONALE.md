@@ -20,6 +20,8 @@ The visible IMDb package (`com.imdb.livingroom.firetv`) follows the same
 root-only path, while the separate legacy `com.amazon.imdb.tv.android.app`
 package remains an ordinary user-0 candidate. The root-only package list is
 closed and exact; its journal records only verified changes for restoration.
+The Fire TV screensaver (`com.amazon.ftv.screensaver`) is mandatory core
+preservation and is never a debloat candidate.
 Root-only hidden packages retain their system APKs, are verified through
 `dumpsys package` (`User 0: installed=true hidden=true`), and are restored with
 `pm unhide --user 0`. A normal `pm disable` on these packages was observed to

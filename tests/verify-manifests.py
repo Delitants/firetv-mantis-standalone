@@ -22,6 +22,7 @@ MANDATORY_CORE = (
     "com.amazon.dialservice",
     "com.amazon.dp.logger",
     "com.amazon.fireinputdevices",
+    "com.amazon.ftv.screensaver",
     "com.amazon.ftv.xpicker",
     "com.amazon.ftvads.deeplinking",
     "com.amazon.net.smartconnect",

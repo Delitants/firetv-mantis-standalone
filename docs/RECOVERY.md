@@ -120,9 +120,11 @@ the controller host; keep all three files together and do not edit them. The
 restore script verifies the journal with the build's observed
 `/system/bin/md5sum`, then enables or unhides only entries that the journal
 records as changed by that deployment. Verify that it reports
-`ROOT_RESTORE=PASS` before rebooting. Restore the ordinary 30-package user-0
+`ROOT_RESTORE=PASS` before rebooting. Restore the ordinary 29-package user-0
 ledger separately with `mantis-tool.sh restore`; do not treat a root restore as
 a substitute for that checksummed inverse.
+Older checksummed backups that recorded a screensaver disable are still
+restorable with the current `mantis-tool.sh restore` command.
 
 Do not reboot before pre-reboot verification and a rollback rehearsal. Locale
 is never changed by this controller. If a locale is changed separately, record
