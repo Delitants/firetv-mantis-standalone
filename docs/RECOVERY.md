@@ -13,7 +13,7 @@ keeps ledger entries until package state and all guards can be checked.
 
 ```sh
 SERIAL=USB_SERIAL NETWORK_SERIAL=DEVICE_IP:5555 \
-  /path/to/private-backup/deployment-TIMESTAMP/debloat-backup/restore-user0.sh
+  "$HOME/firetv-mantis-backups/deployment-TIMESTAMP/debloat-backup/restore-user0.sh"
 ```
 
 Before `apply`, run an audit, retain its output directory, read

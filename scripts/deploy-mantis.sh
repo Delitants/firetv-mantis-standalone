@@ -39,13 +39,26 @@ done
 
 [ "$YES" = yes ] || { printf '%s\n' '--yes is required' >&2; exit 64; }
 [ -n "$SERIAL" ] && [ -n "$NETWORK_SERIAL" ] && [ -n "$OUTPUT" ] || { usage; exit 64; }
+case "$OUTPUT" in
+  */path/to/private-backup|*/path/to/private-backup/*)
+    printf 'example --output path is not a backup location: %s\n' "$OUTPUT" >&2
+    exit 64
+    ;;
+  /*) ;;
+  *) printf 'specify an existing absolute directory for --output: %s\n' "$OUTPUT" >&2; exit 64 ;;
+esac
+[ "$OUTPUT" != / ] || { printf '%s\n' '--output must not be the filesystem root' >&2; exit 64; }
+[ -d "$OUTPUT" ] && [ ! -L "$OUTPUT" ] || {
+  printf 'the --output directory is missing or is a symlink; create it first: %s\n' "$OUTPUT" >&2
+  exit 64
+}
+[ -w "$OUTPUT" ] || { printf 'the --output directory is not writable: %s\n' "$OUTPUT" >&2; exit 64; }
 [ -f "$ROOT_BINARY" ] && [ ! -L "$ROOT_BINARY" ] || { printf '%s\n' 'root binary is missing or symlinked' >&2; exit 64; }
 [ -f "$ROOT_PROFILE" ] && [ ! -L "$ROOT_PROFILE" ] || { printf '%s\n' 'root profile is missing or symlinked' >&2; exit 64; }
 for tool in "$ADB" "$CURL" "$AAPT" "$APKSIGNER"; do
   command -v "$tool" >/dev/null 2>&1 || [ -x "$tool" ] || { printf 'required tool not found: %s\n' "$tool" >&2; exit 64; }
 done
 
-mkdir -p "$OUTPUT"
 RUN_DIR=$OUTPUT/deployment-$(date -u +%Y%m%dT%H%M%SZ)
 [ ! -e "$RUN_DIR" ] && [ ! -L "$RUN_DIR" ] || { printf 'output exists: %s\n' "$RUN_DIR" >&2; exit 1; }
 mkdir "$RUN_DIR"

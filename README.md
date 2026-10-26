@@ -88,12 +88,19 @@ app installation if USB is missing or a protected core package such as
 `com.amazon.dp.logger` is not enabled; restore that package's baseline before
 trying deployment.
 
+Create your private backup directory first. The script rejects missing,
+relative, and example output paths before contacting the stick:
+
+```sh
+mkdir -p "$HOME/firetv-mantis-backups"
+```
+
 ```sh
 scripts/deploy-mantis.sh \
   --serial USB_SERIAL \
   --network-serial DEVICE_IP:5555 \
   --root-binary ../GhostLock/build/ghostlock_root \
-  --output /path/to/private-backup \
+  --output "$HOME/firetv-mantis-backups" \
   --yes
 ```
 
@@ -112,7 +119,7 @@ the partial state. For example:
 
 ```sh
 SERIAL=USB_SERIAL NETWORK_SERIAL=DEVICE_IP:5555 \
-  /path/to/private-backup/deployment-TIMESTAMP/debloat-backup/restore-user0.sh
+  "$HOME/firetv-mantis-backups/deployment-TIMESTAMP/debloat-backup/restore-user0.sh"
 ```
 
 The post-reboot check proves the Android Home intent opens Wolf. ADB key
