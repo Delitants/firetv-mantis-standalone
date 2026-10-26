@@ -16,11 +16,14 @@ running anything.
 
 - Installs Wolf Launcher `0.1.9-Wolf` and Aurora Store `4.8.4` after checking
   their APKs.
-- Reversibly disables 29 listed packages for user 0. The root stage hides OTA,
+- Reversibly disables 27 listed packages for user 0, plus Prime Video and
+  shopping apps when installed. The root stage hides OTA,
   Appstore, the visible IMDb app, and stock Home-starter for user 0, then
   disables only the stock Home activity. System APKs are not deleted.
 - Makes Wolf the Home launcher while keeping stock Settings, Wi-Fi, Bluetooth,
   remote-control services, the screensaver, and USB/network ADB available.
+- Hides Wolf's empty Widgets section, its own tile, "What Should I Watch", and
+  Prime tiles. When two Downloads tiles exist, it keeps the non-blue one.
 - Preserves TiviMate, WireGuard, and Sweet TV when installed; it does not
   require or install missing ones.
 

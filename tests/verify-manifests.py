@@ -76,6 +76,13 @@ MANDATORY_ROOT_PACKAGES = (
     "com.amazon.venezia",
 )
 
+OPTIONAL_USER0_PACKAGES = (
+    "com.amazon.alexashopping",
+    "com.amazon.amazonvideo.livingroom",
+    "com.amazon.shoptv.client",
+    "com.amazon.shoptv.firetv.client",
+)
+
 
 class ValidationError(Exception):
     """A package manifest violates the conservative safety contract."""
@@ -87,6 +94,7 @@ MANIFEST_NAMES = (
     "preserve-core.txt",
     "preserve-user-apps.txt",
     "remove-user0.txt",
+    "remove-if-present-user0.txt",
 )
 
 
@@ -116,6 +124,7 @@ def validate_manifests(directory):
     core = set(manifests["preserve-core.txt"])
     user_apps = set(manifests["preserve-user-apps.txt"])
     removal = set(manifests["remove-user0.txt"])
+    optional_removal = set(manifests["remove-if-present-user0.txt"])
     root_packages = set(manifests["disable-root-packages.txt"])
     missing_core = set(MANDATORY_CORE) - core
     if missing_core:
@@ -124,7 +133,9 @@ def validate_manifests(directory):
         raise ValidationError("preserve-user-apps.txt must contain exactly the protected user apps")
     if root_packages != set(MANDATORY_ROOT_PACKAGES):
         raise ValidationError("disable-root-packages.txt must contain exactly the root-only packages")
-    for package in removal:
+    if optional_removal != set(OPTIONAL_USER0_PACKAGES):
+        raise ValidationError("remove-if-present-user0.txt must contain exactly the optional packages")
+    for package in removal | optional_removal:
         lowered = package.lower()
         if package in set(MANDATORY_USER_APPS) or package in set(MANDATORY_CORE):
             raise ValidationError(f"protected package removal: {package}")
@@ -134,15 +145,17 @@ def validate_manifests(directory):
             raise ValidationError(f"Whisper package is protected: {package}")
         if not package.startswith("com.amazon."):
             raise ValidationError(f"removal is not an Amazon package: {package}")
-    overlap = (core | user_apps) & removal
+    overlap = (core | user_apps) & (removal | optional_removal)
     if overlap:
         raise ValidationError(f"preserve/removal overlap: {sorted(overlap)[0]}")
-    root_removal_overlap = root_packages & removal
+    root_removal_overlap = root_packages & (removal | optional_removal)
     if root_removal_overlap:
         raise ValidationError(f"root/removal overlap: {sorted(root_removal_overlap)[0]}")
     root_preserve_overlap = (core | user_apps) & root_packages
     if root_preserve_overlap:
         raise ValidationError(f"root/preserve overlap: {sorted(root_preserve_overlap)[0]}")
+    if removal & optional_removal:
+        raise ValidationError(f"mandatory/optional removal overlap: {sorted(removal & optional_removal)[0]}")
 
     return len(core) + len(user_apps), len(removal), len(root_packages)
 
@@ -156,6 +169,7 @@ def positive_fixture(directory):
     write_manifest(directory, "preserve-core.txt", MANDATORY_CORE)
     write_manifest(directory, "preserve-user-apps.txt", MANDATORY_USER_APPS)
     write_manifest(directory, "remove-user0.txt", ("com.amazon.bueller.music",))
+    write_manifest(directory, "remove-if-present-user0.txt", OPTIONAL_USER0_PACKAGES)
 
 
 def assert_rejected(directory, description, expected_error):
@@ -181,6 +195,14 @@ def run_self_test():
 
         write_manifest(root, "disable-root-packages.txt", MANDATORY_ROOT_PACKAGES + ("com.amazon.extra",))
         assert_rejected(root, "unexpected root-only package", "must contain exactly")
+        positive_fixture(root)
+
+        write_manifest(root, "remove-if-present-user0.txt", OPTIONAL_USER0_PACKAGES[1:])
+        assert_rejected(root, "missing optional shopping package", "must contain exactly")
+        positive_fixture(root)
+
+        write_manifest(root, "remove-user0.txt", ("com.amazon.bueller.music", OPTIONAL_USER0_PACKAGES[0]))
+        assert_rejected(root, "mandatory and optional overlap", "mandatory/optional removal overlap")
         positive_fixture(root)
 
         write_manifest(root, "preserve-core.txt", MANDATORY_CORE[1:])

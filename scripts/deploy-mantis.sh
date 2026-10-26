@@ -194,6 +194,9 @@ qa() {
   target_gate
   while IFS= read -r package; do package_disabled "$package" || fail "$phase debloat state $package"; done < "$ROOT_DIR/manifests/remove-user0.txt"
   while IFS= read -r package; do
+    if package_enabled "$package"; then fail "$phase optional debloat state $package"; fi
+  done < "$ROOT_DIR/manifests/remove-if-present-user0.txt"
+  while IFS= read -r package; do
     package_hidden "$package" || fail "$phase root-only hidden state $package"
   done < "$ROOT_DIR/manifests/disable-root-packages.txt"
   baseline_packages=$RUN_DIR/debloat-backup/packages-enabled.txt
@@ -237,6 +240,7 @@ qa() {
     com.wolf.firelauncher/.screens.launcher.LauncherActivity|com.wolf.firelauncher/com.wolf.firelauncher.screens.launcher.LauncherActivity) ;;
     *) fail "$phase Wolf focus actual=$home_focus" ;;
   esac
+  python3 "$HERE/wolf-layout.py" --adb "$ADB" --serial "$SERIAL" --verify || fail "$phase Wolf layout"
   printf 'QA_%s=PASS\n' "$phase"
 }
 
@@ -279,6 +283,8 @@ esac
 
 announce_phase WOLF_INSTALL
 "$TOOL" --adb "$ADB" --curl "$CURL" --aapt "$AAPT" --apksigner "$APKSIGNER" --serial "$SERIAL" --yes install-wolf
+announce_phase WOLF_LAYOUT
+python3 "$HERE/wolf-layout.py" --adb "$ADB" --serial "$SERIAL" || fail 'Wolf layout setup failed before debloat'
 announce_phase AURORA_INSTALL
 install_aurora
 announce_phase DEBLOAT_APPLY

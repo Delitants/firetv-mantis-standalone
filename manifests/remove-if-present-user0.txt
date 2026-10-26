@@ -1,0 +1,4 @@
+com.amazon.alexashopping
+com.amazon.amazonvideo.livingroom
+com.amazon.shoptv.client
+com.amazon.shoptv.firetv.client

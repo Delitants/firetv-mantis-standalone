@@ -22,6 +22,12 @@ package remains an ordinary user-0 candidate. The root-only package list is
 closed and exact; its journal records only verified changes for restoration.
 The Fire TV screensaver (`com.amazon.ftv.screensaver`) is mandatory core
 preservation and is never a debloat candidate.
+The optional candidate list disables the separate Prime Video package
+`com.amazon.amazonvideo.livingroom`, Alexa Shopping (`com.amazon.alexashopping`),
+and both ShopTV packages if present. The old Prime package `com.amazon.firebat`
+remains in the required list. An absent optional package is recorded as skipped
+and does not block deployment. Installed optional packages use the same
+checksummed restore ledger as required candidates.
 Root-only hidden packages retain their system APKs, are verified through
 `dumpsys package` (`User 0: installed=true hidden=true`), and are restored with
 `pm unhide --user 0`. A normal `pm disable` on these packages was observed to
@@ -37,10 +43,11 @@ voice dependencies; hiding its "What Should I Watch" Wolf tile does not disable
 or remove that package.
 
 The enabled package inventory (`pm list packages -e`) is the operative set.
-Each candidate must begin enabled, then be absent from that inventory and
-present in `pm list packages -d` after `pm disable-user --user 0`. A candidate
-already present only in the disabled inventory is skipped and never recorded
-for restore. A candidate in neither inventory, or in both, is a hard failure.
+Each installed candidate must become absent from that inventory and present
+in `pm list packages -d` after `pm disable-user --user 0`. A candidate already
+present only in the disabled inventory is skipped and never recorded for
+restore. A required candidate in neither inventory, or any candidate in both,
+is a hard failure. An absent optional candidate is skipped.
 Only verified state transitions enter the checksummed
 `disabled-successfully.txt` ledger; restore runs `pm enable --user 0` over that
 ledger in reverse order and verifies the inverse transition. Before each

@@ -11,6 +11,8 @@ sh "$SOURCE_ROOT/tests/test-settings-grid-focus.sh"
 sh "$SOURCE_ROOT/tests/test-tun0-probe.sh"
 sh "$SOURCE_ROOT/tests/test-usb-primary.sh"
 sh "$SOURCE_ROOT/tests/test-core-preflight.sh"
+python3 -B "$SOURCE_ROOT/tests/test-wolf-layout.py"
+sh "$SOURCE_ROOT/tests/test-optional-debloat.sh"
 sh "$SOURCE_ROOT/tests/test-network-loss-rollback.sh"
 sh "$SOURCE_ROOT/tests/test-legacy-screensaver-restore.sh"
 TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mantis-tool-tests.XXXXXX")
@@ -236,7 +238,7 @@ prepare_package_state() {
   unset FAKE_AFTER_ENABLE_SETTINGS_ROUTE_ACTION FAKE_AFTER_ENABLE_SETTINGS_ROUTE_VALUE
 }
 
-[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 29 ] || fail 'remove-user0.txt must contain exactly 29 packages'
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 27 ] || fail 'remove-user0.txt must contain exactly 27 required packages'
 assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.ftvads.deeplinking'
 assert_not_contains "$(cat "$MANIFEST_REMOVE")" 'com.amazon.ftvads.deeplinking'
 assert_contains "$(cat "$ROOT/manifests/preserve-core.txt")" 'com.amazon.tv.csapp'
@@ -656,9 +658,9 @@ mv "$FAKE_PACKAGE_STATE.next" "$FAKE_PACKAGE_STATE"
 run_tool --output "$OPTIONAL_APPS_DIR" --yes apply ||
   fail "apply rejected absent optional user apps: $ERR"
 assert_contains "$OUT" 'APPLY=PASS'
-assert_contains "$OUT" 'APPLY_PROGRESS=0/2'
-assert_contains "$OUT" 'APPLY_PROGRESS=1/2 package=com.amazon.android.marketplace'
-assert_contains "$OUT" 'APPLY_PROGRESS=2/2 package=com.amazon.bueller.music'
+assert_contains "$OUT" 'APPLY_PROGRESS=0/6'
+assert_contains "$OUT" 'APPLY_PROGRESS=1/6 package=com.amazon.android.marketplace'
+assert_contains "$OUT" 'APPLY_PROGRESS=2/6 package=com.amazon.bueller.music'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm enable --user 0 com.wireguard.android'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'pm enable --user 0 tv.sweet.tvplayer'
 VERIFY_BASELINE=$OPTIONAL_APPS_DIR
@@ -1736,7 +1738,7 @@ done
 clear_wolf_ready
 unset FAKE_PACKAGE_STATE FAKE_SETTINGS_ROUTE_ACTION FAKE_SETTINGS_ROUTE_VALUE FAKE_UI_EMPTY_ACTION
 
-[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 29 ] || fail 'test run changed the exact 29-package candidate manifest'
+[ "$(wc -l < "$MANIFEST_REMOVE" | tr -d ' ')" = 27 ] || fail 'test run changed the exact 27-package required manifest'
 cmp "$ORIGINAL_REMOVE" "$MANIFEST_REMOVE" >/dev/null || fail 'test run changed candidate manifest content'
 python3 -B "$ROOT/tests/verify-manifests.py" "$ROOT/manifests"
 python3 -B "$ROOT/tests/test-atomic-rename.py"

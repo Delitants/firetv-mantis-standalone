@@ -1423,7 +1423,8 @@ validate_recorded_package() {
     return 0
   fi
   script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-  awk -v package="$recorded_candidate" '$0 == package { found = 1 } END { exit found ? 0 : 1 }' "$MANIFEST_DIR/remove-user0.txt"
+  awk -v package="$recorded_candidate" '$0 == package { found = 1 } END { exit found ? 0 : 1 }' \
+    "$MANIFEST_DIR/remove-user0.txt" "$MANIFEST_DIR/remove-if-present-user0.txt"
 }
 
 recorded_package_exists() {
@@ -1576,7 +1577,7 @@ validate_restore_journal() {
     [ -n "$journal_state" ] || continue
     [ -z "${journal_extra:-}" ] || { printf '%s\n' 'invalid operation journal record' >&2; return 1; }
     case "$journal_state" in
-      attempt|success|failure|skip|rollback|guard-failure) ;;
+      attempt|success|failure|skip|skip-absent|rollback|guard-failure) ;;
       *) printf 'invalid operation journal state: %s\n' "$journal_state" >&2; return 1 ;;
     esac
     validate_recorded_package "$journal_package" || {
@@ -1631,6 +1632,9 @@ plan() {
   while IFS= read -r package; do
     printf 'DISABLE=%s RESTORE=%s --user 0 %s\n' "$package" "$plan_restore" "$package"
   done < "$MANIFEST_DIR/remove-user0.txt"
+  while IFS= read -r package; do
+    printf 'DISABLE_IF_PRESENT=%s RESTORE=%s --user 0 %s\n' "$package" "$plan_restore" "$package"
+  done < "$MANIFEST_DIR/remove-if-present-user0.txt"
   printf '%s\n' 'PLAN=PASS'
 }
 
@@ -1649,13 +1653,14 @@ apply() {
   journal_file=$backup_dir/operation-journal.txt
   : > "$journal_file"
   refresh_backup_checksums "$backup_dir" || exit 1
-  apply_total=$(awk 'END { print NR }' "$MANIFEST_DIR/remove-user0.txt")
+  apply_total=$(cat "$MANIFEST_DIR/remove-user0.txt" "$MANIFEST_DIR/remove-if-present-user0.txt" | awk 'END { print NR }')
   apply_count=0
   apply_progress() {
     printf '%s\n' "$1"
     if [ "${MANTIS_PROGRESS_FD:-}" = 3 ]; then printf '%s\n' "$1" >&3; fi
   }
   apply_progress "APPLY_PROGRESS=0/$apply_total"
+  for apply_manifest in "$MANIFEST_DIR/remove-user0.txt" "$MANIFEST_DIR/remove-if-present-user0.txt"; do
   while IFS= read -r package; do
     capture_package_state "$package" || { rollback_batch '' "$removed_file" "$journal_file"; exit 1; }
     if ! package_list_contains "$PACKAGE_ENABLED" "$package"; then
@@ -1664,6 +1669,13 @@ apply() {
         refresh_backup_checksums "$backup_dir" || exit 1
         apply_count=$((apply_count + 1))
         apply_progress "APPLY_PROGRESS=$apply_count/$apply_total package=$package skipped=already-disabled"
+        continue
+      fi
+      if [ "$apply_manifest" = "$MANIFEST_DIR/remove-if-present-user0.txt" ]; then
+        printf 'skip-absent %s\n' "$package" >> "$journal_file"
+        refresh_backup_checksums "$backup_dir" || exit 1
+        apply_count=$((apply_count + 1))
+        apply_progress "APPLY_PROGRESS=$apply_count/$apply_total package=$package skipped=absent"
         continue
       fi
       rollback_batch '' "$removed_file" "$journal_file" || true
@@ -1726,7 +1738,8 @@ apply() {
     fi
     apply_count=$((apply_count + 1))
     apply_progress "APPLY_PROGRESS=$apply_count/$apply_total package=$apply_guard_package"
-  done < "$MANIFEST_DIR/remove-user0.txt"
+  done < "$apply_manifest"
+  done
   printf 'APPLY_OUTPUT=%s\n' "$backup_dir"
   printf '%s\n' 'APPLY=PASS'
 }

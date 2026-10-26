@@ -10,8 +10,6 @@ com.amazon.hedwig
 com.amazon.imdb.tv.android.app
 com.amazon.minitv.android.app
 com.amazon.recess
-com.amazon.shoptv.client
-com.amazon.shoptv.firetv.client
 com.amazon.sneakpeek
 com.amazon.spotify.mediabrowserservice
 com.amazon.ssm

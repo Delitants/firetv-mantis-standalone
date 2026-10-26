@@ -105,11 +105,17 @@ contains "$ROOT_RESTORE" 'md5sum "$JOURNAL"'
 contains "$ROOT_RESTORE" 'root-actions.journal.md5'
 profile_line=$(grep -n '^profile_check=' "$DEPLOY" | head -n 1 | cut -d: -f1)
 wolf_line=$(grep -n '^announce_phase WOLF_INSTALL$' "$DEPLOY" | head -n 1 | cut -d: -f1)
+wolf_layout_line=$(grep -n '^announce_phase WOLF_LAYOUT$' "$DEPLOY" | head -n 1 | cut -d: -f1)
 debloat_line=$(grep -n '^announce_phase DEBLOAT_APPLY$' "$DEPLOY" | head -n 1 | cut -d: -f1)
 [ -n "$profile_line" ] && [ "$profile_line" -lt "$wolf_line" ] && [ "$profile_line" -lt "$debloat_line" ] || fail 'root profile validation must precede all mutations'
+[ -n "$wolf_layout_line" ] && [ "$wolf_line" -lt "$wolf_layout_line" ] && [ "$wolf_layout_line" -lt "$debloat_line" ] || fail 'Wolf layout must be checked before debloat'
 absent "$DEPLOY" 'uk-UA'
 
 contains "$DEPLOY" 'install-wolf'
+contains "$DEPLOY" 'announce_phase WOLF_LAYOUT'
+contains "$DEPLOY" 'wolf-layout.py'
+contains "$DEPLOY" '"$SERIAL" --verify'
+contains "$DEPLOY" 'remove-if-present-user0.txt'
 contains "$DEPLOY" 'run-bounded.py'
 contains "$CONTROLLER" 'run-bounded.py'
 contains "$CONTROLLER" 'WolfLauncher_0.1.9-Wolf.apk'
