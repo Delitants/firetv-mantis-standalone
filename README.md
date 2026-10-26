@@ -57,11 +57,35 @@ You need authorized **USB and network ADB connections to the same stick**, plus
 `adb`, `curl`, `aapt`, `apksigner`, and Python 3 on the host. From the
 `firetv-mantis-standalone` directory, replace the placeholders below:
 
-Use the physical USB device shown as `device` with `usb:` in `adb devices -l`
-for `--serial`. Use the stick's separate `IP:5555` connection for
-`--network-serial`. The script stops before app installation if USB is missing
-or a protected core package such as `com.amazon.dp.logger` is not enabled;
-restore that package's baseline before trying deployment.
+First, connect the stick to the host by USB and list ADB devices:
+
+```sh
+adb devices -l
+```
+
+Find the row that says `device` and contains `usb:`. Copy its first field as
+`USB_SERIAL`. Do not use an `IP:5555` row or a row marked `unauthorized`.
+
+Next, find the stick's Wi-Fi IP over USB:
+
+```sh
+adb -s USB_SERIAL shell getprop dhcp.wlan0.ipaddress
+```
+
+If that prints nothing, find the IP in Fire TV Settings > Network or your
+router's device list. The network ADB serial is this IP followed by `:5555`.
+Connect it and confirm that both the USB row and the `IP:5555` row say
+`device`:
+
+```sh
+adb connect DEVICE_IP:5555
+adb devices -l
+```
+
+Use those two values in the deployment command below. The script stops before
+app installation if USB is missing or a protected core package such as
+`com.amazon.dp.logger` is not enabled; restore that package's baseline before
+trying deployment.
 
 ```sh
 scripts/deploy-mantis.sh \
