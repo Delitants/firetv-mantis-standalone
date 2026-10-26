@@ -2,6 +2,7 @@
 set -eu
 
 SOURCE_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+sh "$SOURCE_ROOT/tests/test-linux-host-setup.sh"
 sh "$SOURCE_ROOT/tests/test-apk-badging.sh"
 sh "$SOURCE_ROOT/tests/test-root-binary-identity.sh"
 sh "$SOURCE_ROOT/tests/test-hud-focus-retry.sh"

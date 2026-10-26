@@ -35,19 +35,20 @@ exact scope and rollback.
 
 ## 1. Build the temporary-root tool
 
-On a host with Android NDK r30, clone this repository and the pinned GhostLock
-source side by side:
+On Ubuntu or Debian (Linux x86_64), run the host setup script:
 
 ```sh
 git clone https://github.com/Delitants/firetv-mantis-standalone.git
-git clone --branch 4.4 https://github.com/R0rt1z2/GhostLock.git
-cd GhostLock
-git checkout 2e73c256ff0205de6d08ea0996d15f4700e23fdc
-git am ../firetv-mantis-standalone/exploit/patches/0001-feat-add-exact-Mantis-exec-only-root-port.patch
-make NDK=/absolute/path/to/android-ndk-r30 API=24
+cd firetv-mantis-standalone
+scripts/setup-linux-host.sh
 ```
 
-The result is `GhostLock/build/ghostlock_root`. Read the
+If you already cloned the repositories, run only the last two lines. The
+script checks installed tools, asks **Y/N** before APT changes and the
+[Android NDK r30](https://developer.android.com/ndk/downloads) download,
+then asks whether to build the pinned GhostLock source. It does not run the
+exploit or change the stick. The result is `../GhostLock/build/ghostlock_root`.
+Read the
 [exploit notes](exploit/README.md) and patched `README-MANTIS.md` before using
 it. The upstream source is not redistributed here.
 
