@@ -307,7 +307,8 @@ class Device:
     def applications_top(self):
         root = self.open_home()
         candidates = [row for row in resource_rows(root, SECTION_TITLE, self.width, right_only=False)
-                      if row[1][0] < self.width * 0.2 and row[1][2] - row[1][0] > self.width * 0.7]
+                      if row[0].strip() and row[1][0] < self.width * 0.2
+                      and row[1][2] - row[1][0] > self.width * 0.7]
         if len(candidates) != 1:
             raise LayoutError("Wolf primary section title is not uniquely visible")
         return candidates[0][1][1]

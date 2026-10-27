@@ -14,6 +14,22 @@ SPEC.loader.exec_module(WOLF)
 
 
 class WolfLayoutTests(unittest.TestCase):
+    def test_home_primary_section_ignores_empty_secondary_header(self):
+        class SavedHome(WOLF.Device):
+            def __init__(self):
+                super().__init__("unused", "unused")
+                self.width, self.height = 1920, 1080
+
+            def open_home(self):
+                return ET.fromstring('''<hierarchy>
+                    <node package="com.wolf.firelauncher" resource-id="com.wolf.firelauncher:id/title"
+                          text="Applications" bounds="[93,347][1827,396]"/>
+                    <node package="com.wolf.firelauncher" resource-id="com.wolf.firelauncher:id/title"
+                          text="" bounds="[93,670][1827,719]"/>
+                </hierarchy>''')
+
+        self.assertEqual(SavedHome().applications_top(), 347)
+
     def test_public_launcher_has_no_locale_specific_labels(self):
         self.assertNotRegex((ROOT / "scripts/wolf-layout.py").read_text(), r"[\u0400-\u04ff]")
         self.assertFalse((ROOT / "settings-tile/res/values-uk/strings.xml").exists())
