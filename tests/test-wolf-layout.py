@@ -4,8 +4,10 @@
 import importlib.util
 import pathlib
 import struct
+import subprocess
 import unittest
 import xml.etree.ElementTree as ET
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("wolf_layout", ROOT / "scripts/wolf-layout.py")
@@ -14,6 +16,28 @@ SPEC.loader.exec_module(WOLF)
 
 
 class WolfLayoutTests(unittest.TestCase):
+    def test_layout_adb_call_keeps_full_timeout_after_five_minutes_of_progress(self):
+        # A finite sequence of Wolf UI steps may take longer than five minutes.
+        # The next healthy uiautomator call must still get its normal 30 seconds.
+        with mock.patch.object(WOLF.time, "monotonic", side_effect=(1000, 1301)):
+            device = WOLF.Device("fake-adb", "usb-primary")
+            response = subprocess.CompletedProcess([], 0, b"hierarchy", b"")
+            with mock.patch.object(WOLF.subprocess, "run", return_value=response) as adb:
+                self.assertEqual(
+                    device.command("shell", "uiautomator", "dump", "/data/local/tmp/layout.xml"),
+                    b"hierarchy",
+                )
+        self.assertEqual(adb.call_args.kwargs["timeout"], 30)
+
+    def test_adb_timeout_diagnostic_omits_device_serial(self):
+        with mock.patch.object(WOLF.time, "monotonic", side_effect=(1000, 1001)):
+            device = WOLF.Device("fake-adb", "usb-primary")
+            timeout = subprocess.TimeoutExpired(["fake-adb", "-s", "usb-primary", "shell"], 30)
+            with mock.patch.object(WOLF.subprocess, "run", side_effect=timeout):
+                with self.assertRaisesRegex(WOLF.LayoutError, "ADB shell timed out after 30 seconds") as caught:
+                    device.command("shell", "uiautomator", "dump", "/data/local/tmp/layout.xml")
+        self.assertNotIn("usb-primary", str(caught.exception))
+
     def test_home_primary_section_ignores_empty_secondary_header(self):
         class SavedHome(WOLF.Device):
             def __init__(self):

@@ -20,6 +20,7 @@ SIDEBAR_HEADER = WOLF_PACKAGE + ":id/sidebar_header"
 SIDEBAR_ITEM = WOLF_PACKAGE + ":id/first_line"
 SIDEBAR_CHECKBOX = WOLF_PACKAGE + ":id/check_box"
 SECTION_TITLE = WOLF_PACKAGE + ":id/title"
+LAYOUT_BUDGET_SECONDS = 900
 
 
 class LayoutError(Exception):
@@ -114,19 +115,22 @@ class Device:
         self.serial = serial
         self.width = None
         self.height = None
-        self.deadline = time.monotonic() + 300
+        self.deadline = time.monotonic() + LAYOUT_BUDGET_SECONDS
 
     def command(self, *args, timeout=30):
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
-            raise LayoutError("Wolf UI operation exceeded 300 seconds")
-        result = subprocess.run(
-            [self.adb, "-s", self.serial, *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=min(timeout, remaining),
-            check=False,
-        )
+            raise LayoutError(f"Wolf UI operation exceeded {LAYOUT_BUDGET_SECONDS} seconds")
+        try:
+            result = subprocess.run(
+                [self.adb, "-s", self.serial, *args],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=min(timeout, remaining),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise LayoutError(f"ADB {args[0]} timed out after {error.timeout:g} seconds") from None
         if result.returncode:
             raise LayoutError(
                 f"ADB {args[0]} failed: {result.stderr.decode('utf-8', 'replace').strip()}"
