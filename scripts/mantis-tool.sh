@@ -1704,21 +1704,21 @@ apply() {
       disabled_now=yes
       append_recorded_package "$removed_file" "$package" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }
     fi
-    if [ "$disable_status" -ne 0 ]; then
-      apply_failed_package=$package
-      printf 'failure %s\n' "$package" >> "$journal_file"
-      rollback_batch '' "$removed_file" "$journal_file" || true
-      refresh_backup_checksums "$backup_dir" || true
-      printf 'disable failed for %s\n' "$apply_failed_package" >&2
-      exit 1
-    fi
     if [ "$disabled_now" != yes ]; then
       apply_failed_package=$package
       printf 'failure %s\n' "$package" >> "$journal_file"
       rollback_batch '' "$removed_file" "$journal_file" || true
       refresh_backup_checksums "$backup_dir" || true
-      printf 'disable verification failed for %s\n' "$apply_failed_package" >&2
+      if [ "$disable_status" -ne 0 ]; then
+        printf 'disable failed for %s\n' "$apply_failed_package" >&2
+      else
+        printf 'disable verification failed for %s\n' "$apply_failed_package" >&2
+      fi
       exit 1
+    fi
+    if [ "$disable_status" -ne 0 ]; then
+      printf 'command-error-state-verified %s status=%s\n' "$package" "$disable_status" >> "$journal_file"
+      printf 'DISABLE_COMMAND_ERROR_STATE_VERIFIED package=%s status=%s\n' "$package" "$disable_status"
     fi
     printf 'success %s\n' "$package" >> "$journal_file"
     refresh_backup_checksums "$backup_dir" || { rollback_batch '' "$removed_file" "$journal_file" || true; exit 1; }

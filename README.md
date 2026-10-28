@@ -23,7 +23,8 @@ running anything.
 - Makes Wolf the Home launcher while keeping stock Settings, Wi-Fi, Bluetooth,
   remote-control services, the screensaver, and USB/network ADB available.
 - Hides Wolf's empty Widgets section, its own tile, "What Should I Watch", and
-  Prime tiles. When two Downloads tiles exist, it keeps the non-blue one.
+  Prime tiles. When two Downloads tiles can be distinguished by their icons,
+  it keeps the non-blue one; ambiguous duplicates are left untouched and logged.
 - Preserves TiviMate, WireGuard, and Sweet TV when installed; it does not
   require or install missing ones.
 
@@ -115,10 +116,17 @@ apps, Wi-Fi, Bluetooth, and ADB again. It prints the live log path and
 A Settings check can still take a few minutes, while package changes print
 `APPLY_PROGRESS`. **Keep the private output directory:** restoring protected
 changes requires its root-action journal and another temporary-root session.
-See [recovery](docs/RECOVERY.md) if any check fails.
-If rollback reports an incomplete backup, keep that directory and use its
-`restore-user0.sh` once both ADB connections work. Do not rerun deployment over
-the partial state. For example:
+See [recovery](docs/RECOVERY.md) if any check fails. If both ADB connections
+work again, you can rerun the **same deployment command** after a partial run,
+even if its old backup is unavailable. Each run makes a new backup and skips
+packages already disabled. It does not guess which run disabled them or restore
+their original state. A nonzero disable command is accepted only if both
+package inventories confirm the package is disabled and the safety checks pass.
+If the previous run reached `ROOT_ACTIONS` and root failed, reboot the stick
+before rerunning so the next attempt is on a fresh boot.
+
+If you still have an incomplete rollback backup and want to restore the
+changes it records, run its `restore-user0.sh` once both ADB connections work:
 
 ```sh
 SERIAL=USB_SERIAL NETWORK_SERIAL=DEVICE_IP:5555 \

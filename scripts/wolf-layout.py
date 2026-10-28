@@ -176,13 +176,13 @@ class Device:
         self.shell("am", "start", "-n", HOME)
         time.sleep(0.8)
         self.frame()
-        for _ in range(4):
+        for _ in range(6):
             root = self.ui()
-            if not sidebar_open(root, self.width):
+            if not sidebar_open(root, self.width) and not checkbox_items(root, self.width):
                 return root
             self.shell("input", "keyevent", "4")
             time.sleep(0.3)
-        raise LayoutError("Wolf Settings sidebar remained open over Home")
+        raise LayoutError("Wolf dialog or Settings sidebar remained open over Home")
 
     def open_settings(self):
         self.open_home()
@@ -285,7 +285,8 @@ class Device:
             print(f"WOLF_DOWNLOAD_TILES={len(found)} skipped=no-duplicate")
             return
         if len(found) != 2 or sum(is_blue for _, is_blue in found) != 1:
-            raise LayoutError("Downloads duplicates cannot be identified by icon")
+            print(f"WOLF_DOWNLOAD_TILES={len(found)} skipped=ambiguous-icons", file=sys.stderr)
+            return
         blue_box = next(box for box, is_blue in found if is_blue)
         other_box = next(box for box, is_blue in found if not is_blue)
         self.set_hidden(other_box, "visible")
@@ -298,7 +299,8 @@ class Device:
         if len(found) < 2:
             return
         if len(found) != 2 or sum(is_blue for _, is_blue in found) != 1:
-            raise LayoutError("Downloads duplicates cannot be identified by icon")
+            print(f"WOLF_DOWNLOAD_TILES={len(found)} verify=ambiguous-icons", file=sys.stderr)
+            return
         for box, is_blue in found:
             desired = "hidden" if is_blue else "visible"
             if self.marker(box) != desired:
@@ -313,11 +315,7 @@ class Device:
             raise LayoutError("Wolf primary section title is not uniquely visible")
         return candidates[0][1][1]
 
-    def hide_empty_widgets(self):
-        top = self.applications_top()
-        if top <= self.height * 0.26:
-            print("WOLF_WIDGET_GAP=PASS already-closed")
-            return
+    def open_widget_options(self):
         self.open_settings()
         self.tap(sidebar_items(self.ui(), self.width)[0][1])
         section_items = sidebar_items(self.ui(), self.width)
@@ -329,15 +327,50 @@ class Device:
         self.tap(widgets[0][1])
         options = sidebar_items(self.ui(), self.width)
         checks = checkbox_items(self.ui(), self.width)
-        if len(options) < 3 or not checks or not (options[0][1][1] <= checks[0][1][1] <= options[0][1][3]):
+        show_checks = ([box for _, box in checks
+                        if options and options[0][1][1] <= (box[1] + box[3]) // 2 <= options[0][1][3]])
+        if len(options) < 3 or options[0][0] != "Show Section" or len(show_checks) != 1:
             raise LayoutError("Wolf Widgets visibility control was not identifiable")
-        self.tap(options[0][1])
+        return options[0][1], show_checks[0]
+
+    def widget_checkbox_state(self, box):
+        frame = self.frame()
+        left, top, right, bottom = box
+        colors = []
+        for x_fraction, y_fraction in ((0.3, 0.3), (0.7, 0.3),
+                                       (0.3, 0.7), (0.7, 0.7),
+                                       (0.2, 0.5), (0.8, 0.5)):
+            x = round(left + (right - left) * x_fraction)
+            y = round(top + (bottom - top) * y_fraction)
+            try:
+                colors.append(marker_state(frame.pixel(x, y)))
+            except LayoutError:
+                continue
+        green = colors.count("hidden")
+        white = colors.count("visible")
+        if green >= 3:
+            return "shown"
+        if green == 0 and white >= 3:
+            return "hidden"
+        raise LayoutError("Wolf Widgets checkbox has unknown visual state")
+
+    def verify_widgets_hidden(self):
+        _, checkbox = self.open_widget_options()
+        state = self.widget_checkbox_state(checkbox)
+        self.shell("input", "keyevent", "4")
+        self.open_home()
+        if state != "hidden":
+            raise LayoutError("Wolf Widgets section remains shown")
+
+    def hide_empty_widgets(self):
+        row, checkbox = self.open_widget_options()
+        state = self.widget_checkbox_state(checkbox)
+        if state == "shown":
+            self.tap(row)
         # Wolf applies section changes when the dialog closes with Back.
         self.shell("input", "keyevent", "4")
-        time.sleep(0.3)
-        if self.applications_top() > self.height * 0.26:
-            raise LayoutError("Widgets section remained visible after toggle")
-        print("WOLF_WIDGET_GAP=PASS hidden-empty-section")
+        self.verify_widgets_hidden()
+        print(f"WOLF_WIDGET_GAP=PASS {'hidden-empty-section' if state == 'shown' else 'already-hidden'}")
 
 
 def main():
@@ -353,8 +386,7 @@ def main():
         raise LayoutError("Wolf layout target mismatch")
     if args.verify:
         print("WOLF_LAYOUT_STEP=VERIFY", flush=True)
-        if device.applications_top() > device.height * 0.26:
-            raise LayoutError("empty Widgets section reopened")
+        device.verify_widgets_hidden()
         device.verify_downloads()
         device.verify_named_hidden("What Should I Watch")
         device.verify_named_hidden("Wolf Launcher", required=True)

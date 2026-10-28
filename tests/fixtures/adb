@@ -381,6 +381,10 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
           silent-no-effect) value= ;;
           *) value=${FAKE_DISABLE_RESULT:-"Package $package new state: disabled-user"} ;;
         esac
+        if [ "${FAKE_DISABLE_ERROR_AFTER_STATE_PACKAGE:-}" = "$package" ]; then
+          printf '%s\n' 'Error: transport reported failure after state change' >&2
+          exit 1
+        fi
         ;;
       *) printf 'unsupported fake pm command: %s\n' "$*" >&2; exit 64 ;;
     esac

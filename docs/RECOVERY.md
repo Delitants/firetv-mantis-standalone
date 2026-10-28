@@ -8,8 +8,13 @@ before deployment. The script will not enable it for you.
 
 If debloat stops and says rollback is incomplete, save the entire checksummed
 backup directory. Reconnect both ADB transports and run the backup's
-`restore-user0.sh`; do not rerun deployment on that partial state. Restore
-keeps ledger entries until package state and all guards can be checked.
+`restore-user0.sh` if you want to restore the changes recorded in that run.
+Restore keeps ledger entries until package state and all guards can be checked.
+If the old backup is gone, reconnect both ADB transports and rerun the
+deployment script. It creates a new backup from the current state and skips
+already-disabled packages. It cannot reconstruct the lost original baseline
+or undo earlier root-only changes. If the previous run attempted root and
+failed, reboot before rerunning to give the exploit a fresh boot.
 
 ```sh
 SERIAL=USB_SERIAL NETWORK_SERIAL=DEVICE_IP:5555 \
