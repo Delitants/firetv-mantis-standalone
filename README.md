@@ -136,6 +136,10 @@ SERIAL=USB_SERIAL NETWORK_SERIAL=DEVICE_IP:5555 \
 The post-reboot check proves the Android Home intent opens Wolf. ADB key
 injection does not reproduce this model's physical remote Home button, so
 test that button directly before relying on it.
+Video playback is also a manual check: play the same known video before and
+after deployment. The log says `VIDEO_PLAYBACK=UNVERIFIED` because ADB focus
+and UI checks cannot prove what appears on the TV. If playback stays black,
+keep the full backup and follow [recovery](docs/RECOVERY.md) before rerunning.
 
 ## Optional Settings tile
 

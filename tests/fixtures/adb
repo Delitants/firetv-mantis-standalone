@@ -251,7 +251,17 @@ case "$1" in
       global:bluetooth_on)
         if [ -n "${FAKE_AFTER_ENABLE_BLUETOOTH_ON+x}" ] && [ -n "${FAKE_PACKAGE_STATE:-}" ] &&
           [ -e "$FAKE_PACKAGE_STATE.enable-occurred" ]
-        then value=$FAKE_AFTER_ENABLE_BLUETOOTH_ON
+        then
+          if [ "${FAKE_AFTER_ENABLE_BLUETOOTH_ON_ONCE:-no}" = yes ]; then
+            if [ ! -e "$FAKE_PACKAGE_STATE.bluetooth-once" ]; then
+              : > "$FAKE_PACKAGE_STATE.bluetooth-once"
+              value=$FAKE_AFTER_ENABLE_BLUETOOTH_ON
+            else
+              value=${FAKE_BLUETOOTH_ON:-1}
+            fi
+          else
+            value=$FAKE_AFTER_ENABLE_BLUETOOTH_ON
+          fi
         else value=${FAKE_BLUETOOTH_ON:-1}
         fi
         ;;
@@ -589,7 +599,9 @@ versionName=$wolf_version_name"
           root-sequence:20,22,22) tile=Preferences ;;
           *) tile=Unknown ;;
         esac
-        value="<hierarchy><node text=\"\" focused=\"true\" clickable=\"true\"><node text=\"$tile\" resource-id=\"com.amazon.tv.launcher:id/title_text\" /></node></hierarchy>"
+        root_focused=true
+        [ "${FAKE_ROOT_GRID_NO_FOCUS:-no}" != yes ] || root_focused=false
+        value="<hierarchy><node text=\"\" focused=\"$root_focused\" clickable=\"true\"><node text=\"$tile\" resource-id=\"com.amazon.tv.launcher:id/title_text\" /></node></hierarchy>"
         ;;
       *)
         if [ "$action" = "${FAKE_UI_EMPTY_ACTION:-}" ]; then value='<hierarchy></hierarchy>'; else value='<hierarchy><node text="Settings" /></hierarchy>'; fi

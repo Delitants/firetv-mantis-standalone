@@ -1079,15 +1079,22 @@ open_stock_settings_root() {
   # Moving immediately can select a different tile (Equipment Control on the
   # observed target), so wait for the Network tile to be visibly focused.
   grid_attempt=1
+  grid_title=
+  grid_detail=
   while [ "$grid_attempt" -le 3 ]; do
-    if grid_title=$(stock_grid_focus 2>/dev/null) && [ "$grid_title" = Network ]; then
-      return 0
+    if grid_output=$(stock_grid_focus 2>&1); then
+      grid_title=$grid_output
+      grid_detail="focused=$grid_title"
+      [ "$grid_title" != Network ] || return 0
+    else
+      grid_detail=$(printf '%s\n' "$grid_output" | sed -n '1p')
     fi
     [ "$grid_attempt" -lt 3 ] || break
     sleep 1
     grid_attempt=$((grid_attempt + 1))
   done
-  printf 'Settings root grid did not focus Network: actual=%s\n' "${grid_title:-unreadable}" >&2
+  printf 'Settings root grid did not focus Network: actual=%s detail=%s\n' \
+    "${grid_title:-unreadable}" "${grid_detail:-none}" >&2
   return 1
 }
 
@@ -1377,18 +1384,65 @@ rollback_recorded_packages() {
     else
       restore_recorded_package "$backup_dir" "$rollback_package" || rollback_result=$?
     fi
-    if [ "$rollback_result" -ne 0 ]; then
-      printf 'rollback failed for %s\n' "$rollback_package" >&2
-      rollback_ok=no
-      if [ "$rollback_mode" = apply ] && [ "$rollback_result" -eq 2 ]; then
+    if [ "$rollback_result" -eq 2 ]; then
+      # The inverse enable and both package inventories were verified, but
+      # its global safety guard did not pass. A batch rollback may finish all
+      # inverses and check the final state; an explicit restore stops here.
+      if [ "$rollback_mode" = apply ]; then
+        printf 'rollback enabled %s; safety guard pending\n' "$rollback_package" >&2
         rollback_defer_guard=yes
         continue
       fi
+      printf 'rollback enabled %s; safety guard failed, recovery ledger retained\n' "$rollback_package" >&2
+      rollback_ok=no
+      break
+    fi
+    if [ "$rollback_result" -ne 0 ]; then
+      printf 'rollback enable failed for %s\n' "$rollback_package" >&2
+      rollback_ok=no
       break
     fi
   done < "$rollback_file"
+  if [ "$rollback_ok" = yes ] && [ "$rollback_defer_guard" = yes ]; then
+    finalize_deferred_rollback "$removed_file" "$rollback_file" || rollback_ok=no
+  fi
   rm -f "$rollback_file"
   [ "$rollback_ok" = yes ]
+}
+
+finalize_deferred_rollback() {
+  deferred_ledger=$1
+  deferred_file=$2
+  deferred_backup=$(dirname "$deferred_ledger")
+  if ! compact_guard; then
+    printf 'rollback safety guard still fails; recovery ledger preserved at %s\n' "$deferred_backup" >&2
+    return 1
+  fi
+  # Validate every inverse and its durable journal before pruning any entry.
+  while IFS= read -r deferred_package; do
+    [ -n "$deferred_package" ] || continue
+    recorded_package_exists "$deferred_ledger" "$deferred_package" || continue
+    grep -Fqx "attempt $deferred_package" "$deferred_backup/restore-journal.txt" || return 1
+    if ! grep -Fqx "success $deferred_package" "$deferred_backup/restore-journal.txt" &&
+      ! grep -Fqx "success-after-error $deferred_package" "$deferred_backup/restore-journal.txt"
+    then
+      printf 'rollback journal lacks verified enable for %s\n' "$deferred_package" >&2
+      return 1
+    fi
+    capture_package_state "$deferred_package" || return 1
+    if ! package_list_contains "$PACKAGE_ENABLED" "$deferred_package" ||
+      package_list_contains "$PACKAGE_DISABLED" "$deferred_package"
+    then
+      printf 'rollback package state remains unverified for %s\n' "$deferred_package" >&2
+      return 1
+    fi
+  done < "$deferred_file"
+  while IFS= read -r deferred_package; do
+    [ -n "$deferred_package" ] || continue
+    recorded_package_exists "$deferred_ledger" "$deferred_package" || continue
+    append_restore_record "$deferred_backup" reconciled-enabled "$deferred_package" || return 1
+    remove_recorded_package "$deferred_ledger" "$deferred_package" || return 1
+  done < "$deferred_file"
 }
 
 rollback_batch() {

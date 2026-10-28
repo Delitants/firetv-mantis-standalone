@@ -10,8 +10,9 @@ If debloat stops and says rollback is incomplete, save the entire checksummed
 backup directory. Reconnect both ADB transports and run the backup's
 `restore-user0.sh` if you want to restore the changes recorded in that run.
 Restore keeps ledger entries until package state and all guards can be checked.
-If the old backup is gone, reconnect both ADB transports and rerun the
-deployment script. It creates a new backup from the current state and skips
+If the old backup is gone and the device is otherwise healthy, reconnect both
+ADB transports and rerun the deployment script. It creates a new backup from
+the current state and skips
 already-disabled packages. It cannot reconstruct the lost original baseline
 or undo earlier root-only changes. If the previous run attempted root and
 failed, reboot before rerunning to give the exploit a fresh boot.
@@ -98,6 +99,16 @@ recorded successful-disable ledger in reverse order:
 ```sh
 scripts/mantis-tool.sh --serial SERIAL restore AUDIT_DIRECTORY
 ```
+
+If video playback stays black, keep the full deployment directory and record
+whether the same video worked before deployment. Use the recorded recovery
+ledger to restore user-0 packages; if `ROOT_ACTIONS` ran, also restore its
+root-only changes as described below. Reboot and test the same video again
+before another deployment. A black TV picture can also come from the HDMI
+path; compare an ADB screenshot with the TV and check the direct HDMI
+connection, cable, or intermediate receiver; see
+[Amazon's blank-screen guidance](https://digprjsurvey.amazon.com/csad/help/node/GWTKVNPDJLFKR4FR).
+Keep any `logcat` capture private.
 
 The generated `restore-user0.sh` is a resumable entry point tied to its audit
 directory. It invokes the reviewed controller at the path embedded when the

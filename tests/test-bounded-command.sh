@@ -31,6 +31,35 @@ case "$output" in *usb-primary*|*com.amazon.example*)
   ;;
 esac
 
+# Shell reads run between package mutations. A timeout must identify the read
+# kind while keeping device identifiers, package names, and arguments private.
+for probe in \
+  'settings get global adb_enabled|adb.shell.settings.get' \
+  'getprop persist.sys.locale|adb.shell.getprop' \
+  'dumpsys package com.amazon.example|adb.shell.dumpsys.package' \
+  'cmd package resolve-activity --brief -a android.settings.SETTINGS|adb.shell.cmd.package.resolve-activity' \
+  'cat /proc/net/dev|adb.shell.cat' \
+  'netstat -ltn|adb.shell.netstat' \
+  'uiautomator dump /sdcard/mantis-ui-smoke.xml|adb.shell.uiautomator.dump'; do
+  probe_args=${probe%%|*}
+  expected_label=${probe#*|}
+  status=0
+  # The fixture arguments are deliberately unquoted for word splitting.
+  # shellcheck disable=SC2086
+  output=$(python3 "$root/scripts/run-bounded.py" 0.05 "$slow_adb_dir/adb" -s usb-primary \
+    shell $probe_args 2>&1) || status=$?
+  [ "$status" -eq 124 ] || { printf 'FAIL: probe timeout returned %s\n' "$status" >&2; exit 1; }
+  case "$output" in *"operation=$expected_label"*) ;; *)
+    printf 'FAIL: probe timeout label expected=%s actual=%s\n' "$expected_label" "$output" >&2
+    exit 1
+  esac
+  case "$output" in *usb-primary*|*com.amazon.example*|*adb_enabled*|*persist.sys.locale*|*mantis-ui-smoke.xml*)
+    printf 'FAIL: probe timeout exposed private arguments: %s\n' "$output" >&2
+    exit 1
+    ;;
+  esac
+done
+
 output=$(python3 "$root/scripts/run-bounded.py" 2 sh -c 'printf bounded')
 [ "$output" = bounded ] || {
   printf 'FAIL: bounded command did not forward output: %s\n' "$output" >&2

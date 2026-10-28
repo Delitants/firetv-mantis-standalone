@@ -241,6 +241,8 @@ qa() {
     *) fail "$phase Wolf focus actual=$home_focus" ;;
   esac
   python3 "$HERE/wolf-layout.py" --adb "$ADB" --serial "$SERIAL" --verify || fail "$phase Wolf layout"
+  # ADB focus and UI hierarchy checks cannot establish that HDMI video plays.
+  printf '%s\n' 'VIDEO_PLAYBACK=UNVERIFIED'
   printf 'QA_%s=PASS\n' "$phase"
 }
 
