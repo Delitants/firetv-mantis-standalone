@@ -101,12 +101,13 @@ scripts/mantis-tool.sh --serial SERIAL restore AUDIT_DIRECTORY
 ```
 
 If video playback stays black, keep the full deployment directory and record
-whether the same video worked before deployment. Use the recorded recovery
+whether the same video worked before deployment. A tester reported that video
+worked again after restoring the disabled packages. Use the recorded recovery
 ledger to restore user-0 packages; if `ROOT_ACTIONS` ran, also restore its
 root-only changes as described below. Reboot and test the same video again
-before another deployment. A black TV picture can also come from the HDMI
-path; compare an ADB screenshot with the TV and check the direct HDMI
-connection, cable, or intermediate receiver; see
+before another deployment. If playback still fails after restoration, compare
+an ADB screenshot with the TV and check the direct HDMI connection, cable, or
+intermediate receiver; see
 [Amazon's blank-screen guidance](https://digprjsurvey.amazon.com/csad/help/node/GWTKVNPDJLFKR4FR).
 Keep any `logcat` capture private.
 
