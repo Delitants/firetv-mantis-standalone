@@ -1,11 +1,11 @@
 # Fire TV Stick 4K (Mantis): temporary root and debloat
 
-**Playback issue under investigation:** An [exact-build tester](https://xdaforums.com/t/root-guide-mantis-aftmm-ns6711-temporary-root-wolf-launcher-reversible-debloat.4802548/post-90795934)
-reports that videos stay black after the package-disable stage and work again
-after restoring the disabled packages. The responsible package is not yet
-known. If you need reliable video playback, wait for a verified fix before
-deploying. If already affected, keep your backup and use the
-[recovery guide](docs/RECOVERY.md).
+**Playback report under investigation:** An [exact-build tester](https://xdaforums.com/t/root-guide-mantis-aftmm-ns6711-temporary-root-wolf-launcher-reversible-debloat.4802548/post-90795934)
+reported black video after deployment and recovery after re-enabling packages.
+The same tester later played video after reboot with 28 of those 29 packages
+disabled. The cause is unconfirmed. If you need reliable playback, wait for a
+verified explanation before deploying. If already affected, keep your backup
+and follow the [recovery guide](docs/RECOVERY.md).
 
 This project is for the **Fire TV Stick 4K `mantis/AFTMM` only**—not the 4K
 Max. The scripts require Fire OS build `NS6711`, incremental
