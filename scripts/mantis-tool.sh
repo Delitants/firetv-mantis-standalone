@@ -1075,13 +1075,14 @@ open_stock_settings_root() {
     *) printf '%s\n' 'stock Settings root launch failed' >&2; return 1 ;;
   esac
   settings_focus com.amazon.tv.launcher/.ui.MainSettingsActivity || return 1
-  # CLEAR_TOP can return before this grid resets its retained tile focus.
-  # Moving immediately can select a different tile (Equipment Control on the
-  # observed target), so wait for the Network tile to be visibly focused.
+  # CLEAR_TOP can retain another tile or return before the grid has focus.
+  # Move focus to the top-left with directional keys only, and never select
+  # anything until the Network tile is visibly focused.
   grid_attempt=1
   grid_title=
   grid_detail=
   while [ "$grid_attempt" -le 3 ]; do
+    grid_title=
     if grid_output=$(stock_grid_focus 2>&1); then
       grid_title=$grid_output
       grid_detail="focused=$grid_title"
@@ -1090,7 +1091,11 @@ open_stock_settings_root() {
       grid_detail=$(printf '%s\n' "$grid_output" | sed -n '1p')
     fi
     [ "$grid_attempt" -lt 3 ] || break
-    sleep 1
+    settings_focus com.amazon.tv.launcher/.ui.MainSettingsActivity || return 1
+    printf 'Settings grid focus recovery attempt=%s\n' "$grid_attempt" >&2
+    for grid_key in 19 19 19 21 21 21 21; do
+      settings_key "$grid_key" || return 1
+    done
     grid_attempt=$((grid_attempt + 1))
   done
   printf 'Settings root grid did not focus Network: actual=%s detail=%s\n' \

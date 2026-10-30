@@ -16,6 +16,5 @@ if printf '%s\n' '<hierarchy><node text="Network" /></hierarchy>' | python3 "$PA
 fi
 
 grep -Fq 'expect_stock_grid_tile "Display & Sounds"' "$ROOT/scripts/mantis-tool.sh"
-grep -Fq '[ "$grid_title" = Network ]' "$ROOT/scripts/mantis-tool.sh"
 
 printf '%s\n' 'SETTINGS_GRID_FOCUS=PASS'

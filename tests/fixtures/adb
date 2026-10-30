@@ -491,7 +491,28 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
         esac
         ;;
       root)
-        case "$event" in 4|3) ;; *) write_ui_state "root-sequence:$event" ;; esac
+        case "$event" in
+          4|3) ;;
+          19|21)
+            if [ -n "${FAKE_ROOT_GRID_BEFORE_MOVE:-}" ] && [ -n "${FAKE_ROOT_GRID_MOVE_MARKER:-}" ]; then
+              if [ -e "$FAKE_ROOT_GRID_MOVE_MARKER" ]; then
+                read -r grid_row grid_column < "$FAKE_ROOT_GRID_MOVE_MARKER"
+                grid_had_focus=yes
+              else
+                case "$FAKE_ROOT_GRID_BEFORE_MOVE" in
+                  unfocused) grid_row=3; grid_column=5; grid_had_focus=no ;;
+                  equipment) grid_row=2; grid_column=4; grid_had_focus=yes ;;
+                esac
+              fi
+              if [ "$grid_had_focus" = yes ]; then
+                if [ "$event" = 19 ] && [ "$grid_row" -gt 1 ]; then grid_row=$((grid_row - 1)); fi
+                if [ "$event" = 21 ] && [ "$grid_column" -gt 1 ]; then grid_column=$((grid_column - 1)); fi
+              fi
+              printf '%s %s\n' "$grid_row" "$grid_column" > "$FAKE_ROOT_GRID_MOVE_MARKER"
+            fi
+            ;;
+          *) write_ui_state "root-sequence:$event" ;;
+        esac
         ;;
       root-sequence:*)
         history=${state#root-sequence:}; history="$history,$event"
@@ -601,6 +622,17 @@ versionName=$wolf_version_name"
         esac
         root_focused=true
         [ "${FAKE_ROOT_GRID_NO_FOCUS:-no}" != yes ] || root_focused=false
+        if [ -n "${FAKE_ROOT_GRID_BEFORE_MOVE:-}" ] && [ -n "${FAKE_ROOT_GRID_MOVE_MARKER:-}" ]; then
+          if [ -e "$FAKE_ROOT_GRID_MOVE_MARKER" ]; then
+            read -r grid_row grid_column < "$FAKE_ROOT_GRID_MOVE_MARKER"
+            [ "$grid_row:$grid_column" = 1:1 ] || tile=Other
+          else
+            case "$FAKE_ROOT_GRID_BEFORE_MOVE" in
+              unfocused) root_focused=false ;;
+              equipment) tile='Equipment&#10;Control' ;;
+            esac
+          fi
+        fi
         value="<hierarchy><node text=\"\" focused=\"$root_focused\" clickable=\"true\"><node text=\"$tile\" resource-id=\"com.amazon.tv.launcher:id/title_text\" /></node></hierarchy>"
         ;;
       *)
