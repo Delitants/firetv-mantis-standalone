@@ -464,6 +464,20 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
     fi
     ;;
   input)
+    if [ "${2:-}" = tap ]; then
+      state=$(read_ui_state 2>/dev/null || true)
+      [ "$state" = root ] && [ "${FAKE_ROOT_GRID_TAP_FALLBACK:-no}" = yes ] || {
+        printf 'unsupported fake input tap: state=%s\n' "$state" >&2
+        exit 64
+      }
+      case "${3:-}:${4:-}" in
+        150:250) write_ui_state 'ready:android.settings.DISPLAY_SETTINGS' ;;
+        350:350) write_ui_state 'ready:android.settings.ACCESSIBILITY_SETTINGS' ;;
+        350:250) write_ui_state 'ready:com.amazon.device.settings.action.DATE_TIME' ;;
+        *) printf 'unsafe fake Settings tap: %s:%s\n' "${3:-}" "${4:-}" >&2; exit 64 ;;
+      esac
+      exit 0
+    fi
     [ "${2:-}" = keyevent ] || { printf 'unsupported fake input command: %s\n' "$*" >&2; exit 64; }
     state=$(read_ui_state 2>/dev/null || true)
     event=${3:-}; [ "$event" != --longpress ] || event="--longpress:${4:-}"
@@ -613,27 +627,31 @@ versionName=$wolf_version_name"
         esac
         ;;
       root|root-sequence:*)
-        case "$state" in
-          root) tile=Network ;;
-          root-sequence:20) tile='Display &amp; Sounds' ;;
-          root-sequence:20,20,22,22) tile=Accessibility ;;
-          root-sequence:20,22,22) tile=Preferences ;;
-          *) tile=Unknown ;;
-        esac
-        root_focused=true
-        [ "${FAKE_ROOT_GRID_NO_FOCUS:-no}" != yes ] || root_focused=false
-        if [ -n "${FAKE_ROOT_GRID_BEFORE_MOVE:-}" ] && [ -n "${FAKE_ROOT_GRID_MOVE_MARKER:-}" ]; then
-          if [ -e "$FAKE_ROOT_GRID_MOVE_MARKER" ]; then
-            read -r grid_row grid_column < "$FAKE_ROOT_GRID_MOVE_MARKER"
-            [ "$grid_row:$grid_column" = 1:1 ] || tile=Other
-          else
-            case "$FAKE_ROOT_GRID_BEFORE_MOVE" in
-              unfocused) root_focused=false ;;
-              equipment) tile='Equipment&#10;Control' ;;
-            esac
+        if [ "${FAKE_ROOT_GRID_TAP_FALLBACK:-no}" = yes ] && [ "$state" = root ]; then
+          value='<hierarchy><node package="com.amazon.tv.launcher" enabled="true" focusable="true" focused="false" clickable="true" bounds="[100,100][200,200]"><node package="com.amazon.tv.launcher" enabled="true" resource-id="com.amazon.tv.launcher:id/title_text" text="Network" /></node><node package="com.amazon.tv.launcher" enabled="true" focusable="true" focused="false" clickable="true" bounds="[100,200][200,300]"><node package="com.amazon.tv.launcher" enabled="true" resource-id="com.amazon.tv.launcher:id/title_text" text="Display &amp; Sounds" /></node><node package="com.amazon.tv.launcher" enabled="true" focusable="true" focused="false" clickable="true" bounds="[300,200][400,300]"><node package="com.amazon.tv.launcher" enabled="true" resource-id="com.amazon.tv.launcher:id/title_text" text="Preferences" /></node><node package="com.amazon.tv.launcher" enabled="true" focusable="true" focused="false" clickable="true" bounds="[300,300][400,400]"><node package="com.amazon.tv.launcher" enabled="true" resource-id="com.amazon.tv.launcher:id/title_text" text="Accessibility" /></node></hierarchy>'
+        else
+          case "$state" in
+            root) tile=Network ;;
+            root-sequence:20) tile='Display &amp; Sounds' ;;
+            root-sequence:20,20,22,22) tile=Accessibility ;;
+            root-sequence:20,22,22) tile=Preferences ;;
+            *) tile=Unknown ;;
+          esac
+          root_focused=true
+          [ "${FAKE_ROOT_GRID_NO_FOCUS:-no}" != yes ] || root_focused=false
+          if [ -n "${FAKE_ROOT_GRID_BEFORE_MOVE:-}" ] && [ -n "${FAKE_ROOT_GRID_MOVE_MARKER:-}" ]; then
+            if [ -e "$FAKE_ROOT_GRID_MOVE_MARKER" ]; then
+              read -r grid_row grid_column < "$FAKE_ROOT_GRID_MOVE_MARKER"
+              [ "$grid_row:$grid_column" = 1:1 ] || tile=Other
+            else
+              case "$FAKE_ROOT_GRID_BEFORE_MOVE" in
+                unfocused) root_focused=false ;;
+                equipment) tile='Equipment&#10;Control' ;;
+              esac
+            fi
           fi
+          value="<hierarchy><node text=\"\" focused=\"$root_focused\" clickable=\"true\"><node text=\"$tile\" resource-id=\"com.amazon.tv.launcher:id/title_text\" /></node></hierarchy>"
         fi
-        value="<hierarchy><node text=\"\" focused=\"$root_focused\" clickable=\"true\"><node text=\"$tile\" resource-id=\"com.amazon.tv.launcher:id/title_text\" /></node></hierarchy>"
         ;;
       *)
         if [ "$action" = "${FAKE_UI_EMPTY_ACTION:-}" ]; then value='<hierarchy></hierarchy>'; else value='<hierarchy><node text="Settings" /></hierarchy>'; fi

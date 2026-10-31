@@ -69,8 +69,10 @@ handler can loop while no window is focused. Each such route instead launches
 `com.amazon.tv.launcher/.ui.MainSettingsActivity` with Android's exact
 `0x04000000` `CLEAR_TOP` flag, verifies exact root focus, then follows
 deterministic D-pad navigation. The verifier waits until the root grid's
-Network tile is focused, then checks each intended tile before Select; this
-prevents a retained grid focus from opening the wrong page. The checked
+Network tile is focused, then checks each intended tile before Select. If the
+visible grid remains unfocused, it locates one enabled, clickable tile by its
+exact title and bounds, taps that tile, and verifies the destination activity.
+In that fallback, missing or duplicate tiles stop verification. The checked
 resolver remains the route-identity proof. A missing hierarchy is a failure.
 
 Audit and plan must both report:

@@ -1066,6 +1066,7 @@ prove_stock_settings_hud() {
 }
 
 open_stock_settings_root() {
+  SETTINGS_GRID_NAV_MODE=focus
   root_launch=$(adb_shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity 2>&1) || {
     printf '%s\n' 'stock Settings root launch failed' >&2
     return 1
@@ -1098,6 +1099,14 @@ open_stock_settings_root() {
     done
     grid_attempt=$((grid_attempt + 1))
   done
+  if [ "$grid_detail" = 'Settings grid has 0 focused tiles' ]; then
+    settings_focus com.amazon.tv.launcher/.ui.MainSettingsActivity || return 1
+    if stock_grid_tap_point Network >/dev/null; then
+      SETTINGS_GRID_NAV_MODE=tap
+      printf '%s\n' 'Settings grid navigation=verified-tap' >&2
+      return 0
+    fi
+  fi
   printf 'Settings root grid did not focus Network: actual=%s detail=%s\n' \
     "${grid_title:-unreadable}" "${grid_detail:-none}" >&2
   return 1
@@ -1107,6 +1116,23 @@ stock_grid_focus() {
   read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || return 1
   read_shell cat /sdcard/mantis-ui-smoke.xml || return 1
   printf '%s\n' "$ACTUAL" | python3 "$SCRIPT_DIR/settings-grid-focus.py"
+}
+
+stock_grid_tap_point() {
+  tap_title=$1
+  read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || return 1
+  read_shell cat /sdcard/mantis-ui-smoke.xml || return 1
+  printf '%s\n' "$ACTUAL" | python3 "$SCRIPT_DIR/settings-grid-tap.py" "$tap_title"
+}
+
+tap_stock_grid_tile() {
+  tap_title=$1
+  settings_focus com.amazon.tv.launcher/.ui.MainSettingsActivity || return 1
+  tap_point=$(stock_grid_tap_point "$tap_title") || return 1
+  tap_x=${tap_point%% *}
+  tap_y=${tap_point#* }
+  adb_shell input tap "$tap_x" "$tap_y" >/dev/null || return 1
+  sleep 1
 }
 
 expect_stock_grid_tile() {
@@ -1146,10 +1172,17 @@ stock_menu_settings_navigation() {
   open_stock_settings_root || return 1
   case "$settings_action" in
     android.settings.SETTINGS) ;;
-    android.settings.DISPLAY_SETTINGS) settings_key 20 || return 1; expect_stock_grid_tile "Display & Sounds" || return 1; settings_key 23 || return 1 ;;
-    android.settings.ACCESSIBILITY_SETTINGS) for n in 1 2; do settings_key 20 || return 1; done; for n in 1 2; do settings_key 22 || return 1; done; expect_stock_grid_tile Accessibility || return 1; settings_key 23 || return 1 ;;
+    android.settings.DISPLAY_SETTINGS)
+      if [ "$SETTINGS_GRID_NAV_MODE" = tap ]; then tap_stock_grid_tile "Display & Sounds" || return 1
+      else settings_key 20 || return 1; expect_stock_grid_tile "Display & Sounds" || return 1; settings_key 23 || return 1; fi
+      ;;
+    android.settings.ACCESSIBILITY_SETTINGS)
+      if [ "$SETTINGS_GRID_NAV_MODE" = tap ]; then tap_stock_grid_tile Accessibility || return 1
+      else for n in 1 2; do settings_key 20 || return 1; done; for n in 1 2; do settings_key 22 || return 1; done; expect_stock_grid_tile Accessibility || return 1; settings_key 23 || return 1; fi
+      ;;
     com.amazon.device.settings.action.DATE_TIME|com.amazon.device.settings.action.LANGUAGE)
-      settings_key 20 || return 1; for n in 1 2; do settings_key 22 || return 1; done; expect_stock_grid_tile Preferences || return 1; settings_key 23 || return 1
+      if [ "$SETTINGS_GRID_NAV_MODE" = tap ]; then tap_stock_grid_tile Preferences || return 1
+      else settings_key 20 || return 1; for n in 1 2; do settings_key 22 || return 1; done; expect_stock_grid_tile Preferences || return 1; settings_key 23 || return 1; fi
       settings_focus com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity || return 1
       if [ "$settings_action" = com.amazon.device.settings.action.LANGUAGE ]; then for n in 1 2 3 4 5 6 7; do settings_key 20 || return 1; done; settings_key 23 || return 1; fi
       ;;
