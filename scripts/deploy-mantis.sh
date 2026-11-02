@@ -212,7 +212,7 @@ qa() {
   home=$(adb_shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tr -d '\r' | tail -n 1)
   [ "$home" = 'com.wolf.firelauncher/.screens.launcher.LauncherActivity' ] || fail "$phase Wolf resolver"
   settings_routes_qa
-  "$HERE/mantis-tool.sh" --adb "$ADB" --serial "$SERIAL" verify-settings || fail "$phase Settings HUD/UI smoke"
+  "$HERE/mantis-tool.sh" --adb "$ADB" --serial "$SERIAL" --output "$RUN_DIR" verify-settings || fail "$phase Settings HUD/UI smoke"
   [ "$(adb_shell settings get global adb_enabled | tr -d '\r')" = 1 ] || fail "$phase ADB disabled"
   [ "$(adb_shell getprop init.svc.adbd | tr -d '\r')" = running ] || fail "$phase adbd state"
   case ",$(adb_shell getprop persist.sys.usb.config | tr -d '\r')," in *,adb,*) ;; *) fail "$phase USB ADB config" ;; esac
@@ -256,7 +256,7 @@ announce_phase PREFLIGHT_AUDIT
 "$TOOL" --adb "$ADB" --serial "$SERIAL" --network-serial "$NETWORK_SERIAL" --output "$RUN_DIR/preflight-audit" audit
 preflight_core_packages "$RUN_DIR/preflight-audit"
 announce_phase SETTINGS_PREFLIGHT
-"$TOOL" --adb "$ADB" --serial "$SERIAL" verify-settings
+"$TOOL" --adb "$ADB" --serial "$SERIAL" --output "$RUN_DIR" verify-settings
 announce_phase ROOT_STAGING
 REMOTE=/data/local/tmp/mantis-deploy-$(date -u +%Y%m%dT%H%M%SZ)
 adb_shell mkdir "$REMOTE"

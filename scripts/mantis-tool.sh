@@ -1122,7 +1122,38 @@ stock_grid_tap_point() {
   tap_title=$1
   read_shell uiautomator dump /sdcard/mantis-ui-smoke.xml || return 1
   read_shell cat /sdcard/mantis-ui-smoke.xml || return 1
-  printf '%s\n' "$ACTUAL" | python3 "$SCRIPT_DIR/settings-grid-tap.py" "$tap_title"
+  if tap_point=$(printf '%s\n' "$ACTUAL" | python3 "$SCRIPT_DIR/settings-grid-tap.py" "$tap_title"); then
+    printf '%s\n' "$tap_point"
+  else
+    [ "$tap_title" != Network ] || capture_settings_grid_failure || true
+    return 1
+  fi
+}
+
+capture_settings_grid_failure() (
+  [ -n "$OUTPUT" ] || exit 0
+  umask 077
+  capture_dir=$(mktemp -d "$OUTPUT/settings-grid-failure.XXXXXX") || {
+    printf '%s\n' 'SETTINGS_GRID_CAPTURE=FAIL could not create private directory' >&2
+    exit 1
+  }
+  if ! printf '%s\n' "$ACTUAL" > "$capture_dir/grid.xml"; then
+    printf '%s\n' 'SETTINGS_GRID_CAPTURE=FAIL could not write XML' >&2
+    exit 1
+  fi
+  printf 'SETTINGS_GRID_CAPTURE=%s\n' "$capture_dir/grid.xml" >&2
+)
+
+validate_settings_output_dir() {
+  [ -n "$OUTPUT" ] || return 0
+  case "$OUTPUT" in
+    /*) ;;
+    *) printf '%s\n' 'verify-settings --output requires an existing absolute directory' >&2; return 64 ;;
+  esac
+  if [ "$OUTPUT" = / ] || [ ! -d "$OUTPUT" ] || [ -L "$OUTPUT" ] || [ ! -w "$OUTPUT" ]; then
+    printf '%s\n' 'verify-settings --output requires an existing absolute writable non-symlink directory' >&2
+    return 64
+  fi
 }
 
 tap_stock_grid_tile() {
@@ -1190,6 +1221,7 @@ stock_menu_settings_navigation() {
 }
 
 verify_settings() {
+  validate_settings_output_dir || return $?
   require_target
   prove_stock_settings_hud || exit 1
   settings_route_lines | while IFS='|' read -r settings_action expected_component expected_focus route_kind; do

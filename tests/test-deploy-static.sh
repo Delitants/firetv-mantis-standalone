@@ -98,6 +98,7 @@ contains "$DEPLOY" 'ROOT_LAUNCH_ADB_STATUS='
 contains "$DEPLOY" 'run-bounded.py" 20 "$ADB" -s "$SERIAL" shell'
 contains "$DEPLOY" 'ROOT_WAIT remaining='
 contains "$DEPLOY" 'MANTIS_PROGRESS_FD=3'
+contains "$DEPLOY" '"$RUN_DIR" verify-settings'
 contains "$DEPLOY" 'fops marker absent from every reclaim socket; holding reclaim'
 contains "$DEPLOY" "fail 'boot did not complete within 300 seconds'"
 absent "$ROOT_ACTIONS" 'root-actions.journal.md5'

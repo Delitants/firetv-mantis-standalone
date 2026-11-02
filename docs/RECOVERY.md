@@ -30,6 +30,18 @@ scripts/mantis-tool.sh --serial SERIAL --baseline AUDIT_DIRECTORY verify
 scripts/mantis-tool.sh --serial SERIAL verify-settings
 ```
 
+For a Settings grid failure, you can rerun only the UI check with a private
+capture directory; this does not repeat root or debloat:
+
+```sh
+mkdir -p "$HOME/firetv-mantis-settings-diagnostics"
+scripts/mantis-tool.sh --serial USB_SERIAL \
+  --output "$HOME/firetv-mantis-settings-diagnostics" verify-settings
+```
+
+If the grid check fails, `SETTINGS_GRID_CAPTURE` names a private `grid.xml`
+snapshot taken at the failure. Review its on-screen text before sharing it.
+
 Use the exact serial for the approved target. `verify` requires core packages
 and user apps present in the backup, Bluetooth, the exact Wolf identity and
 activity, locale continuity,
