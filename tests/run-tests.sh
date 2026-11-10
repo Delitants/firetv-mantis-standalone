@@ -12,6 +12,7 @@ sh "$SOURCE_ROOT/tests/test-settings-grid-tap.sh"
 sh "$SOURCE_ROOT/tests/test-settings-root-diagnostics.sh"
 sh "$SOURCE_ROOT/tests/test-settings-root-focus-recovery.sh"
 sh "$SOURCE_ROOT/tests/test-settings-root-tap-fallback.sh"
+sh "$SOURCE_ROOT/tests/test-settings-root-main-action.sh"
 sh "$SOURCE_ROOT/tests/test-settings-grid-capture.sh"
 sh "$SOURCE_ROOT/tests/test-tun0-probe.sh"
 sh "$SOURCE_ROOT/tests/test-usb-primary.sh"
@@ -1385,7 +1386,7 @@ assert_contains "$OUT" 'SETTINGS_ROUTES=PASS'
 assert_contains "$OUT" 'DEVELOPER_OPTIONS=PASS'
 assert_contains "$OUT" 'VERIFY_SETTINGS=PASS'
 assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell input keyevent 176'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -a android.intent.action.MAIN -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
 # Break caught: bringing an existing Settings task forward may resume its last
 # Preferences subpage. The exact CLEAR_TOP flag must produce and focus the root.
@@ -1394,7 +1395,7 @@ set_wolf_ready
 FAKE_ROOT_REQUIRES_CLEAR_TOP=1 \
   run_verify_settings || fail "verify-settings did not clear a resumed Settings task to root: $ERR"
 assert_contains "$OUT" 'UI_SMOKE=PASS'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -a android.intent.action.MAIN -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
 # Status zero and Starting output are insufficient when the platform ignores
 # CLEAR_TOP and keeps the resumed subpage focused.
@@ -1442,7 +1443,7 @@ FAKE_STOCK_MENU_STATUS0_ACTION=android.settings.SETTINGS \
   run_verify_settings || fail "verify-settings rejected the stock-menu path: $ERR"
 assert_contains "$OUT" 'UI_SMOKE=PASS'
 assert_not_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -a android.settings.SETTINGS'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -a android.intent.action.MAIN -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
 # The stock-menu path must not try the shell action even when it would error.
 prepare_package_state
@@ -1468,7 +1469,7 @@ set_wolf_ready
 FAKE_HUD_POST_SELECT_FOCUS=com.amazon.tv.settings.v2/.tv.preferences.PreferencesActivity \
   run_verify_settings || fail "verify-settings rejected a resumed stock HUD subpage: $ERR"
 assert_contains "$OUT" 'UI_SMOKE=PASS'
-assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
+assert_contains "$(cat "$FAKE_ADB_LOG")" 'shell am start -a android.intent.action.MAIN -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity'
 
 # Break caught: Select must leave the HUD for a specifically known stock
 # Settings destination; unchanged HUD or an unknown settings.v2 activity is

@@ -78,9 +78,9 @@ focus and unknown `settings.v2` activities fail closed. Accessibility,
 Display & Sounds, Date & Time, Language, and the main Settings action are
 unsafe to launch by generic shell action on this Fire OS build: a compliance
 handler can loop while no window is focused. Each such route instead launches
-`com.amazon.tv.launcher/.ui.MainSettingsActivity` with Android's exact
-`0x04000000` `CLEAR_TOP` flag, verifies exact root focus, then follows
-deterministic D-pad navigation. The verifier waits until the root grid's
+`com.amazon.tv.launcher/.ui.MainSettingsActivity` with `ACTION_MAIN` and
+Android's exact `0x04000000` `CLEAR_TOP` flag, verifies exact root focus,
+then follows deterministic D-pad navigation. The verifier waits until the root grid's
 Network tile is focused, then checks each intended tile before Select. If the
 visible grid remains unfocused, it locates one enabled, clickable tile by its
 exact title and bounds, taps that tile, and verifies the destination activity.

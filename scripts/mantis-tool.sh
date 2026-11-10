@@ -1067,7 +1067,7 @@ prove_stock_settings_hud() {
 
 open_stock_settings_root() {
   SETTINGS_GRID_NAV_MODE=focus
-  root_launch=$(adb_shell am start -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity 2>&1) || {
+  root_launch=$(adb_shell am start -a android.intent.action.MAIN -f 0x04000000 -n com.amazon.tv.launcher/.ui.MainSettingsActivity 2>&1) || {
     printf '%s\n' 'stock Settings root launch failed' >&2
     return 1
   }

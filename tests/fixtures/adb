@@ -422,14 +422,18 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
       value='Starting: Intent { cmp=com.wolf.firelauncher/.screens.launcher.LauncherActivity }'
     elif [ "${2:-}" = start ] && {
       { [ "${3:-}" = -n ] && [ "${4:-}" = com.amazon.tv.launcher/.ui.MainSettingsActivity ]; } ||
-      { [ "${3:-}" = -f ] && [ "${4:-}" = 0x04000000 ] && [ "${5:-}" = -n ] && [ "${6:-}" = com.amazon.tv.launcher/.ui.MainSettingsActivity ]; }
+      { [ "${3:-}" = -f ] && [ "${4:-}" = 0x04000000 ] && [ "${5:-}" = -n ] && [ "${6:-}" = com.amazon.tv.launcher/.ui.MainSettingsActivity ]; } ||
+      { [ "${3:-}" = -a ] && [ "${4:-}" = android.intent.action.MAIN ] && [ "${5:-}" = -f ] && [ "${6:-}" = 0x04000000 ] && [ "${7:-}" = -n ] && [ "${8:-}" = com.amazon.tv.launcher/.ui.MainSettingsActivity ]; }
     }; then
       if [ "${FAKE_ROOT_START_RESULT:-success}" = failure ]; then
         printf '%s\n' 'Error: Activity not started' >&2
         exit 1
       fi
-      clear_top=0; [ "${3:-}" != -f ] || clear_top=1
-      if [ "${FAKE_ROOT_REQUIRES_CLEAR_TOP:-0}" = 1 ] &&
+      clear_top=0; [ "${3:-}" != -f ] && [ "${5:-}" != -f ] || clear_top=1
+      main_action=0; [ "${3:-}" != -a ] || main_action=1
+      if [ "${FAKE_ROOT_REQUIRES_MAIN_ACTION:-0}" = 1 ] && [ "$main_action" -ne 1 ]; then
+        write_ui_state root-blank
+      elif [ "${FAKE_ROOT_REQUIRES_CLEAR_TOP:-0}" = 1 ] &&
         { [ "$clear_top" -ne 1 ] || [ "${FAKE_ROOT_IGNORE_CLEAR_TOP:-0}" = 1 ]; }; then
         write_ui_state root-resumed
       else
@@ -504,6 +508,7 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
           23) write_ui_state tivimate ;;
         esac
         ;;
+      root-blank) : ;;
       root)
         case "$event" in
           4|3) ;;
@@ -560,7 +565,7 @@ enable [--user USER_ID] PACKAGE_OR_COMPONENT'
         home|tivimate) action=$state ;;
         hud|hud-sequence:*) action=HudActivity ;;
         hud-selected) focus=${FAKE_HUD_POST_SELECT_FOCUS:-com.amazon.tv.launcher/.ui.MainSettingsActivity}; action=explicit ;;
-        root) action=MainSettingsActivity ;;
+        root|root-blank) action=MainSettingsActivity ;;
         root-resumed) action=PreferencesActivity ;;
         root-sequence:*|protected:*) action=wrong ;;
         language-sequence:*) action=PreferencesActivity ;;
@@ -625,6 +630,9 @@ versionName=$wolf_version_name"
           nonclickable) value='<hierarchy><node text="Settings" resource-id="com.amazon.tv.settings.v2:id/hud_settings_button" enabled="true" focusable="true" clickable="false" /></hierarchy>' ;;
           *) value="<hierarchy><node text=\"Profiles\" resource-id=\"com.amazon.tv.settings.v2:id/hud_profiles_button\" enabled=\"true\" focusable=\"true\" focused=\"true\" clickable=\"true\" /><node text=\"Settings\" resource-id=\"com.amazon.tv.settings.v2:id/hud_settings_button\" enabled=\"true\" focusable=\"true\" focused=\"$settings_focused\" clickable=\"true\" /></hierarchy>" ;;
         esac
+        ;;
+      root-blank)
+        value='<hierarchy><node package="com.amazon.tv.launcher" class="android.widget.FrameLayout" focused="false"><node package="com.amazon.tv.launcher" class="android.widget.LinearLayout" focused="false"><node package="com.amazon.tv.launcher" resource-id="android:id/content" focused="false"><node package="com.amazon.tv.launcher" resource-id="com.amazon.tv.launcher:id/container" focused="false" /></node></node></node></hierarchy>'
         ;;
       root|root-sequence:*)
         if [ "${FAKE_ROOT_GRID_TAP_FALLBACK:-no}" = yes ] && [ "$state" = root ]; then
